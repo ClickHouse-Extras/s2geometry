@@ -20,33 +20,43 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <iterator>
+#include <limits>
+#include <string>
+#include <utility>
+#include <vector>
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "absl/base/casts.h"
 #include "absl/flags/flag.h"
 #include "absl/strings/str_format.h"
+#include "absl/strings/string_view.h"
 
 #include "s2/base/commandlineflags.h"
 #include "s2/s1angle.h"
 #include "s2/s1chord_angle.h"
+#include "s2/s2cell.h"
 #include "s2/s2edge_crossings.h"
 #include "s2/s2edge_distances.h"
+#include "s2/s2point.h"
 #include "s2/s2pointutil.h"
 #include "s2/s2predicates_internal.h"
 #include "s2/s2testing.h"
-#include "s2/util/math/exactfloat/exactfloat.h"
-#include "s2/util/math/vector.h"
 
 S2_DEFINE_int32(consistency_iters, 5000,
              "Number of iterations for precision consistency tests");
 
+using absl::string_view;
 using std::back_inserter;
 using std::min;
 using std::numeric_limits;
 using std::pow;
 using std::string;
 using std::vector;
+
+using ::testing::Eq;
 
 namespace s2pred {
 
@@ -483,9 +493,13 @@ TEST(Sign, SymbolicPerturbationCodeCoverage) {
 
 enum Precision { DOUBLE, LONG_DOUBLE, EXACT, SYMBOLIC, NUM_PRECISIONS };
 
-static const char* kPrecisionNames[] = {
-  "double", "long double", "exact", "symbolic"
-};
+static constexpr string_view kPrecisionNames[] = {"double", "long double",
+                                                  "exact", "symbolic"};
+
+// If `sizeof(long double) == sizeof(double)`, then we will never do
+// calculations with `long double` and instead fall back to exact.
+constexpr Precision kLongDoublePrecision =
+    s2pred::kHasLongDouble ? LONG_DOUBLE : EXACT;
 
 // A helper class that keeps track of how often each precision was used and
 // generates a string for logging purposes.
@@ -606,7 +620,7 @@ TEST(CompareDistances, Coverage) {
       1, DOUBLE);
   TestCompareDistances<Sin2Distances>(
       S2Point(2, 0, 0), S2Point(2, -1, 0), S2Point(2, 1, 1e-8),
-      -1, LONG_DOUBLE);
+      -1, kLongDoublePrecision);
   TestCompareDistances<Sin2Distances>(
       S2Point(2, 0, 0), S2Point(2, -1, 0), S2Point(2, 1, 1e-100),
       -1, EXACT);
@@ -626,7 +640,7 @@ TEST(CompareDistances, Coverage) {
       -1, DOUBLE);
   TestCompareDistances<CosDistances>(
       S2Point(1, 1, 1), S2Point(1, -1, 0), S2Point(-1, 1, 3e-18),
-      1, LONG_DOUBLE);
+      1, kLongDoublePrecision);
   TestCompareDistances<CosDistances>(
       S2Point(1, 1, 1), S2Point(1, -1, 0), S2Point(-1, 1, 1e-100),
       1, EXACT);
@@ -646,7 +660,7 @@ TEST(CompareDistances, Coverage) {
       S2Point(1, 1 - 1e-15, 1e-21), 1, DOUBLE);
   TestCompareDistances<MinusSin2Distances>(
       S2Point(-1, -1, 0), S2Point(2, 1, 0), S2Point(2, 1, 1e-8),
-      1, LONG_DOUBLE);
+      1, kLongDoublePrecision);
   TestCompareDistances<MinusSin2Distances>(
       S2Point(-1, -1, 0), S2Point(2, 1, 0), S2Point(2, 1, 1e-30),
       1, EXACT);
@@ -703,8 +717,8 @@ TEST(CompareDistances, Consistency) {
     S1Angle r = S1Angle::Radians(M_PI_2 * pow(1e-30, rnd.RandDouble()));
     if (rnd.OneIn(2)) r = S1Angle::Radians(M_PI_2) - r;
     if (rnd.OneIn(2)) r = S1Angle::Radians(M_PI_2) + r;
-    S2Point a = S2::InterpolateAtDistance(r, x, dir);
-    S2Point b = S2::InterpolateAtDistance(r, x, -dir);
+    S2Point a = S2::GetPointOnLine(x, dir, r);
+    S2Point b = S2::GetPointOnLine(x, -dir, r);
     Precision prec = TestCompareDistancesConsistency<CosDistances>(x, a, b);
     if (r.degrees() >= 45 && r.degrees() <= 135) cos_stats.Tally(prec);
     // The Sin2 method is only valid if both distances are less than 90
@@ -791,7 +805,7 @@ TEST(CompareDistance, Coverage) {
       S1ChordAngle::Radians(1e-15), -1, DOUBLE);
   TestCompareDistance<Sin2Distance>(
       S2Point(1, 0, 0), S2Point(1, 1, 0),
-      S1ChordAngle::Radians(M_PI_4), -1, LONG_DOUBLE);
+      S1ChordAngle::Radians(M_PI_4), -1, kLongDoublePrecision);
   TestCompareDistance<Sin2Distance>(
       S2Point(1, 1e-40, 0), S2Point(1 + DBL_EPSILON, 1e-40, 0),
       S1ChordAngle::Radians(0.9 * DBL_EPSILON * 1e-40), 1, EXACT);
@@ -814,7 +828,7 @@ TEST(CompareDistance, Coverage) {
       S1ChordAngle::Right(), 1, DOUBLE);
   TestCompareDistance<CosDistance>(
       S2Point(1, 1, 0), S2Point(1, -1 - DBL_EPSILON, 0),
-      S1ChordAngle::Right(), 1, LONG_DOUBLE);
+      S1ChordAngle::Right(), 1, kLongDoublePrecision);
   TestCompareDistance<CosDistance>(
       S2Point(1, 1, 0), S2Point(1, -1, 1e-30),
       S1ChordAngle::Right(), 0, EXACT);
@@ -854,7 +868,7 @@ TEST(CompareDistance, Consistency) {
     S1Angle r = S1Angle::Radians(M_PI_2 * pow(1e-30, rnd.RandDouble()));
     if (rnd.OneIn(2)) r = S1Angle::Radians(M_PI_2) - r;
     if (rnd.OneIn(5)) r = S1Angle::Radians(M_PI_2) + r;
-    S2Point y = S2::InterpolateAtDistance(r, x, dir);
+    S2Point y = S2::GetPointOnLine(x, dir, r);
     Precision prec = TestCompareDistanceConsistency<CosDistance>(
         x, y, S1ChordAngle(r));
     if (r.degrees() >= 45) cos_stats.Tally(prec);
@@ -903,7 +917,7 @@ TEST(CompareEdgeDistance, Coverage) {
       S1ChordAngle::Radians(1e-15 + DBL_EPSILON), -1, DOUBLE);
   TestCompareEdgeDistance(
       S2Point(1, 1, 1e-15), S2Point(1, 0, 0), S2Point(0, 1, 0),
-      S1ChordAngle::Radians(1e-15 + DBL_EPSILON), -1, LONG_DOUBLE);
+      S1ChordAngle::Radians(1e-15 + DBL_EPSILON), -1, kLongDoublePrecision);
   TestCompareEdgeDistance(
       S2Point(1, 1, 1e-40), S2Point(1, 0, 0), S2Point(0, 1, 0),
       S1ChordAngle::Radians(1e-40), -1, EXACT);
@@ -919,7 +933,7 @@ TEST(CompareEdgeDistance, Coverage) {
   TestCompareEdgeDistance(
       S2Point(1e-15, 0, 1), S2Point(1, 0, 0), S2Point(0, 1, 0),
       S1ChordAngle::Radians(M_PI_2 - 1e-15 - DBL_EPSILON),
-      1, LONG_DOUBLE);
+      1, kLongDoublePrecision);
   TestCompareEdgeDistance(
       S2Point(1e-40, 0, 1), S2Point(1, 0, 0), S2Point(0, 1, 0),
       S1ChordAngle::Right(), -1, EXACT);
@@ -936,7 +950,7 @@ TEST(CompareEdgeDistance, Coverage) {
       S1ChordAngle::Right(), 1, DOUBLE);
   TestCompareEdgeDistance(
       S2Point(1e-18, -1, 0), S2Point(1, 0, 0), S2Point(1, 1, 0),
-      S1ChordAngle::Right(), -1, LONG_DOUBLE);
+      S1ChordAngle::Right(), -1, kLongDoublePrecision);
   TestCompareEdgeDistance(
       S2Point(1e-100, -1, 0), S2Point(1, 0, 0), S2Point(1, 1, 0),
       S1ChordAngle::Right(), -1, EXACT);
@@ -950,7 +964,7 @@ TEST(CompareEdgeDistance, Coverage) {
       S1ChordAngle::Right(), 1, DOUBLE);
   TestCompareEdgeDistance(
       S2Point(-1, 0, 0), S2Point(1, 0, 0), S2Point(1e-18, 1, 0),
-      S1ChordAngle::Right(), 1, LONG_DOUBLE);
+      S1ChordAngle::Right(), 1, kLongDoublePrecision);
   TestCompareEdgeDistance(
       S2Point(-1, 0, 0), S2Point(1, 0, 0), S2Point(1e-100, 1, 0),
       S1ChordAngle::Right(), 1, EXACT);
@@ -986,7 +1000,7 @@ TEST(CompareEdgeDistance, Consistency) {
     rnd.Reset(iter + 1);  // Easier to reproduce a specific case.
     S2Point a0 = ChoosePoint();
     S1Angle len = S1Angle::Radians(M_PI * pow(1e-20, rnd.RandDouble()));
-    S2Point a1 = S2::InterpolateAtDistance(len, a0, ChoosePoint());
+    S2Point a1 = S2::GetPointOnLine(a0, ChoosePoint(), len);
     if (rnd.OneIn(2)) a1 = -a1;
     if (a0 == -a1) continue;  // Not allowed by API.
     S2Point n = S2::RobustCrossProd(a0, a1).Normalize();
@@ -994,7 +1008,7 @@ TEST(CompareEdgeDistance, Consistency) {
     S2Point a = ((1 - f) * a0 + f * a1).Normalize();
     S1Angle r = S1Angle::Radians(M_PI_2 * pow(1e-20, rnd.RandDouble()));
     if (rnd.OneIn(2)) r = S1Angle::Radians(M_PI_2) - r;
-    S2Point x = S2::InterpolateAtDistance(r, a, n);
+    S2Point x = S2::GetPointOnLine(a, n, r);
     if (rnd.OneIn(5)) {
       // Replace "x" with a random point that is closest to an edge endpoint.
       do {
@@ -1101,13 +1115,201 @@ TEST(CompareEdgeDirections, Coverage) {
                             1, DOUBLE);
   TestCompareEdgeDirections(S2Point(1, 0, 1e-18), S2Point(1, 1, 0),
                             S2Point(0, -1, 0), S2Point(0, 0, 1),
-                            1, LONG_DOUBLE);
+                            1, kLongDoublePrecision);
   TestCompareEdgeDirections(S2Point(1, 0, 1e-50), S2Point(1, 1, 0),
                             S2Point(0, -1, 0), S2Point(0, 0, 1),
                             1, EXACT);
   TestCompareEdgeDirections(S2Point(1, 0, 0), S2Point(1, 1, 0),
                             S2Point(0, -1, 0), S2Point(0, 0, 1),
                             0, EXACT);
+}
+
+// Verifies that SignDotProd(a, b) == expected, and that the minimum
+// required precision is "expected_prec".
+void TestSignDotProd(S2Point a, S2Point b, int expected,
+                     Precision expected_prec) {
+  int actual = SignDotProd(a, b);
+  EXPECT_THAT(actual, Eq(expected));
+
+  // We triage in double precision and then fall back to exact for 0.
+  Precision actual_prec = EXACT;
+  if (TriageSignDotProd(a, b) != 0) {
+    actual_prec = DOUBLE;
+  } else {
+    if (TriageSignDotProd(ToLD(a), ToLD(b)) != 0) {
+      actual_prec = LONG_DOUBLE;
+    }
+  }
+  EXPECT_THAT(actual_prec, Eq(expected_prec));
+}
+
+TEST(SignDotProd, Orthogonal) {
+  const S2Point a(1, 0, 0);
+  const S2Point b(0, 1, 0);
+  TestSignDotProd(a, b, 0, EXACT);
+}
+
+TEST(SignDotProd, NearlyOrthogonalPositive) {
+  Precision LD_OR_EXACT = kHasLongDouble ? LONG_DOUBLE : EXACT;
+  const S2Point a(1, 0, 0);
+  const S2Point b(DBL_EPSILON, 1, 0);
+  TestSignDotProd(a, b, +1, LD_OR_EXACT);
+
+  const S2Point c(1e-45, 1, 0);
+  TestSignDotProd(a, c, +1, EXACT);
+}
+
+TEST(SignDotProd, NearlyOrthogonalNegative) {
+  Precision LD_OR_EXACT = kHasLongDouble ? LONG_DOUBLE : EXACT;
+  const S2Point a(1, 0, 0);
+  const S2Point b(-DBL_EPSILON, 1, 0);
+  TestSignDotProd(a, b, -1, LD_OR_EXACT);
+
+  const S2Point c(-1e-45, 1, 0);
+  TestSignDotProd(a, c, -1, EXACT);
+}
+// Verifies that CircleEdgeIntersectionOrdering(a, b, c, d, n, m) == expected,
+// and that the minimum required precision is "expected_prec".
+void TestIntersectionOrdering(S2Point a, S2Point b, S2Point c, S2Point d,
+                              S2Point m, S2Point n, int expected,
+                              Precision expected_prec) {
+  int actual = CircleEdgeIntersectionOrdering(a, b, c, d, m, n);
+  EXPECT_THAT(actual, Eq(expected));
+
+  // We triage in double precision and then fall back to long double and exact
+  // for 0.
+  Precision actual_prec = EXACT;
+  if (TriageIntersectionOrdering(a, b, c, d, m, n) != 0) {
+    actual_prec = DOUBLE;
+  } else {
+    // We got zero, check for duplicate/reverse duplicate edges before falling
+    // back to more precision.
+    if ((a == c && b == d) || (a == d && b == c)) {
+      actual_prec = DOUBLE;
+    } else {
+      auto la = ToLD(a);
+      auto lb = ToLD(b);
+      auto lc = ToLD(c);
+      auto ld = ToLD(d);
+      auto ln = ToLD(n);
+      auto lm = ToLD(m);
+      if (TriageIntersectionOrdering(la, lb, lc, ld, lm, ln) != 0) {
+        actual_prec = LONG_DOUBLE;
+      }
+    }
+  }
+  EXPECT_THAT(actual_prec, Eq(expected_prec));
+}
+
+TEST(CircleEdgeIntersectionOrdering, Works) {
+  Precision LD_OR_EXACT = kHasLongDouble ? LONG_DOUBLE : EXACT;
+
+  // Two cells who's left and right edges are on the prime meridian,
+  const S2Cell cell0(S2CellId::FromToken("054"));
+  const S2Cell cell1(S2CellId::FromToken("1ac"));
+
+  // And then the three neighbors above them.
+  const S2Cell cella(S2CellId::FromToken("0fc"));
+  const S2Cell cellb(S2CellId::FromToken("104"));
+  const S2Cell cellc(S2CellId::FromToken("10c"));
+
+  // Top, left and right edges of the cell as unnormalized vectors.
+  const S2Point e3 = cell1.GetEdgeRaw(3);
+  const S2Point e2 = cell1.GetEdgeRaw(2);
+  const S2Point e1 = cell1.GetEdgeRaw(1);
+  const S2Point c1 = cell1.GetCenter();
+  const S2Point cb = cellb.GetCenter();
+
+  // The same edge should cross at the same spot exactly.
+  TestIntersectionOrdering(c1, cb, c1, cb, e2, e1, 0, DOUBLE);
+
+  // Simple case where the crossings aren't too close, AB should cross after CD.
+  TestIntersectionOrdering(  //
+      c1, cellb.GetVertex(3), c1, cellb.GetVertex(2), e2, e1, +1, DOUBLE);
+
+  // Swapping the boundary we're comparing against should negate the sign.
+  TestIntersectionOrdering(  //
+      c1, cellb.GetVertex(3), c1, cellb.GetVertex(2), e2, e3, -1, DOUBLE);
+
+  // As should swapping the edge ordering.
+  TestIntersectionOrdering(  //
+      c1, cellb.GetVertex(2), c1, cellb.GetVertex(3), e2, e1, -1, DOUBLE);
+  TestIntersectionOrdering(  //
+      c1, cellb.GetVertex(2), c1, cellb.GetVertex(3), e2, e3, +1, DOUBLE);
+
+  // Nearly the same edge but with one endpoint perturbed enough to require
+  // long double precision.
+  const S2Point yeps = S2Point(0, DBL_EPSILON, 0);
+  TestIntersectionOrdering(c1, cb + yeps, c1, cb, e2, e1, -1, LD_OR_EXACT);
+  TestIntersectionOrdering(c1, cb - yeps, c1, cb, e2, e1, +1, LD_OR_EXACT);
+  TestIntersectionOrdering(c1, cb, c1, cb + yeps, e2, e1, +1, LD_OR_EXACT);
+  TestIntersectionOrdering(c1, cb, c1, cb - yeps, e2, e1, -1, LD_OR_EXACT);
+}
+
+// Verifies that CircleEdgeIntersectionSign(a, b, n, x) == expected, and
+// that the minimum required precision is "expected_prec".
+void TestCircleEdgeIntersectionSign(S2Point a, S2Point b, S2Point n, S2Point x,
+                                    int expected, Precision expected_prec) {
+  int actual = CircleEdgeIntersectionSign(a, b, n, x);
+  EXPECT_THAT(actual, Eq(expected));
+
+  // We triage in double precision and then fall back to long double and exact
+  // for 0.
+  Precision actual_prec = EXACT;
+  if (TriageCircleEdgeIntersectionSign(a, b, n, x) != 0) {
+    actual_prec = DOUBLE;
+  } else {
+    auto la = ToLD(a);
+    auto lb = ToLD(b);
+    auto ln = ToLD(n);
+    auto lx = ToLD(x);
+    if (TriageCircleEdgeIntersectionSign(la, lb, ln, lx) != 0) {
+      actual_prec = LONG_DOUBLE;
+    }
+  }
+  EXPECT_THAT(actual_prec, Eq(expected_prec));
+}
+
+TEST(CircleEdgeIntersectionSign, Works) {
+  // Two cells who's left and right edges are on the prime meridian,
+  const S2Cell cell0(S2CellId::FromToken("054"));
+  const S2Cell cell1(S2CellId::FromToken("1ac"));
+
+  // And then the three neighbors above them.
+  const S2Cell cella(S2CellId::FromToken("0fc"));
+  const S2Cell cellb(S2CellId::FromToken("104"));
+  const S2Cell cellc(S2CellId::FromToken("10c"));
+
+  {
+    // Top, left and right edges of the cell as unnormalized vectors.
+    const S2Point nt = cell1.GetEdgeRaw(2);
+    const S2Point nl = cell1.GetEdgeRaw(3);
+    const S2Point nr = cell1.GetEdgeRaw(1);
+    const S2Point v0 = cell1.GetCenter();
+
+    TestCircleEdgeIntersectionSign(v0, cella.GetVertex(0), nt, nl, -1, DOUBLE);
+    TestCircleEdgeIntersectionSign(v0, cella.GetVertex(0), nt, nr, +1, DOUBLE);
+
+    TestCircleEdgeIntersectionSign(v0, cell1.GetVertex(3), nt, nl, 0, EXACT);
+    TestCircleEdgeIntersectionSign(v0, cell1.GetVertex(3), nt, nr, +1, DOUBLE);
+
+    TestCircleEdgeIntersectionSign(v0, cellb.GetCenter(), nt, nl, +1, DOUBLE);
+    TestCircleEdgeIntersectionSign(v0, cellb.GetCenter(), nt, nr, +1, DOUBLE);
+
+    TestCircleEdgeIntersectionSign(v0, cellc.GetVertex(1), nt, nl, +1, DOUBLE);
+    TestCircleEdgeIntersectionSign(v0, cellc.GetVertex(1), nt, nr, -1, DOUBLE);
+  }
+
+  {
+    // Test landing exactly on the right edge.
+    const S2Point nt = cell0.GetEdgeRaw(2);
+    const S2Point nl = cell0.GetEdgeRaw(3);
+    const S2Point nr = cell0.GetEdgeRaw(1);
+    const S2Point v0 = cell0.GetCenter();
+
+    TestCircleEdgeIntersectionSign(v0, cell0.GetVertex(2), nt, nl, +1, DOUBLE);
+    TestCircleEdgeIntersectionSign(v0, cell0.GetVertex(2), nt, nr, 0, EXACT);
+  }
 }
 
 // Checks that the result at one level of precision is consistent with the
@@ -1138,11 +1340,11 @@ TEST(CompareEdgeDirections, Consistency) {
     rnd.Reset(iter + 1);  // Easier to reproduce a specific case.
     S2Point a0 = ChoosePoint();
     S1Angle a_len = S1Angle::Radians(M_PI * pow(1e-20, rnd.RandDouble()));
-    S2Point a1 = S2::InterpolateAtDistance(a_len, a0, ChoosePoint());
+    S2Point a1 = S2::GetPointOnLine(a0, ChoosePoint(), a_len);
     S2Point a_norm = S2::RobustCrossProd(a0, a1).Normalize();
     S2Point b0 = ChoosePoint();
     S1Angle b_len = S1Angle::Radians(M_PI * pow(1e-20, rnd.RandDouble()));
-    S2Point b1 = S2::InterpolateAtDistance(b_len, b0, a_norm);
+    S2Point b1 = S2::GetPointOnLine(b0, a_norm, b_len);
     if (a0 == -a1 || b0 == -b1) continue;  // Not allowed by API.
     Precision prec = TestCompareEdgeDirectionsConsistency(a0, a1, b0, b1);
     // Don't skew the statistics by recording degenerate inputs.
@@ -1223,7 +1425,7 @@ TEST(EdgeCircumcenterSign, Coverage) {
   TestEdgeCircumcenterSign(
       S2Point(1, -1, 0), S2Point(1, 1, 0),
       S2Point(1, -1e-5, 1), S2Point(1, 1e-5, -1), S2Point(1, 1 - 1e-9, 1e-5),
-      -1, LONG_DOUBLE);
+      -1, kLongDoublePrecision);
   TestEdgeCircumcenterSign(
       S2Point(1, -1, 0), S2Point(1, 1, 0),
       S2Point(1, -1e-5, 1), S2Point(1, 1e-5, -1), S2Point(1, 1 - 1e-15, 1e-5),
@@ -1289,9 +1491,9 @@ TEST(EdgeCircumcenterSign, Consistency) {
     double c1 = (rnd.OneIn(2) ? -1 : 1) * pow(1e-20, rnd.RandDouble());
     S2Point z = (c0 * x0 + c1 * x1).Normalize();
     S1Angle r = S1Angle::Radians(M_PI * pow(1e-30, rnd.RandDouble()));
-    S2Point a = S2::InterpolateAtDistance(r, z, ChoosePoint());
-    S2Point b = S2::InterpolateAtDistance(r, z, ChoosePoint());
-    S2Point c = S2::InterpolateAtDistance(r, z, ChoosePoint());
+    S2Point a = S2::GetPointOnLine(z, ChoosePoint(), r);
+    S2Point b = S2::GetPointOnLine(z, ChoosePoint(), r);
+    S2Point c = S2::GetPointOnLine(z, ChoosePoint(), r);
     Precision prec = TestEdgeCircumcenterSignConsistency(x0, x1, a, b, c);
     // Don't skew the statistics by recording degenerate inputs.
     if (x0 == x1) {
@@ -1382,11 +1584,11 @@ TEST(VoronoiSiteExclusion, Coverage) {
   TestVoronoiSiteExclusion(
       S2Point(1, -1e-10, 1e-5), S2Point(1, 1e-10, -1e-5),
       S2Point(1, -1, 0), S2Point(1, 1, 0), S1ChordAngle::Radians(1e-5),
-      Excluded::NEITHER, LONG_DOUBLE);
+      Excluded::NEITHER, kLongDoublePrecision);
   TestVoronoiSiteExclusion(
       S2Point(1, -1e-17, 1e-5), S2Point(1, 1e-17, -1e-5),
       S2Point(1, -1, 0), S2Point(1, 1, 0), S1ChordAngle::Radians(1e-4),
-      Excluded::NEITHER, LONG_DOUBLE);
+      Excluded::NEITHER, kLongDoublePrecision);
   TestVoronoiSiteExclusion(
       S2Point(1, -1e-20, 1e-5), S2Point(1, 1e-20, -1e-5),
       S2Point(1, -1, 0), S2Point(1, 1, 0), S1ChordAngle::Radians(1e-5),
@@ -1401,11 +1603,11 @@ TEST(VoronoiSiteExclusion, Coverage) {
   TestVoronoiSiteExclusion(
       S2Point(1, -1.00105e-6, 1.0049999999e-5), S2Point(1, 0, -1e-5),
       S2Point(1, -1, 0), S2Point(1, 1, 0), S1ChordAngle::Radians(1.005e-5),
-      Excluded::FIRST, LONG_DOUBLE);
+      Excluded::FIRST, kLongDoublePrecision);
   TestVoronoiSiteExclusion(
       S2Point(1, -1e-6, 1.005e-5), S2Point(1, 0, -1e-5),
       S2Point(1, -1, 0), S2Point(1, 1, 0), S1ChordAngle::Radians(1.005e-5),
-      Excluded::FIRST, LONG_DOUBLE);
+      Excluded::FIRST, kLongDoublePrecision);
   TestVoronoiSiteExclusion(
       S2Point(1, -1e-31, 1.005e-30), S2Point(1, 0, -1e-30),
       S2Point(1, -1, 0), S2Point(1, 1, 0), S1ChordAngle::Radians(1.005e-30),
@@ -1537,8 +1739,8 @@ TEST(VoronoiSiteExclusion, Consistency) {
     double f = pow(1e-20, rnd.RandDouble());
     S2Point p = ((1 - f) * x0 + f * x1).Normalize();
     S1Angle r1 = S1Angle::Radians(M_PI_2 * pow(1e-20, rnd.RandDouble()));
-    S2Point a = S2::InterpolateAtDistance(r1, p, ChoosePoint());
-    S2Point b = S2::InterpolateAtDistance(r1, p, ChoosePoint());
+    S2Point a = S2::GetPointOnLine(p, ChoosePoint(), r1);
+    S2Point b = S2::GetPointOnLine(p, ChoosePoint(), r1);
     // Check that the other API requirements are met.
     S1ChordAngle r(r1);
     if (s2pred::CompareEdgeDistance(a, x0, x1, r) > 0) continue;

@@ -7,11 +7,12 @@
 #include <cinttypes>
 #include <cstdint>
 #include <cstdio>
+#include <vector>
 
 #include "s2/base/commandlineflags.h"
 #include "s2/s2earth.h"
 #include "absl/flags/flag.h"
-#include "s2/s1chord_angle.h"
+#include "s2/s1angle.h"
 #include "s2/s2closest_point_query.h"
 #include "s2/s2point_index.h"
 #include "s2/s2testing.h"
@@ -42,5 +43,5 @@ int main(int argc, char **argv) {
 
   std::printf("Found %" PRId64 " points in %d queries\n", num_found,
               absl::GetFlag(FLAGS_num_queries));
-  return  0;
+  return 0;
 }

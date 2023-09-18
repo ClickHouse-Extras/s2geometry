@@ -17,8 +17,14 @@
 #ifndef S2_S2SHAPE_INDEX_REGION_H_
 #define S2_S2SHAPE_INDEX_REGION_H_
 
+#include <functional>
+#include <utility>
 #include <vector>
+
+#include "absl/base/optimization.h"
 #include "absl/container/flat_hash_map.h"
+#include "s2/r2.h"
+#include "s2/r2rect.h"
 #include "s2/s2cap.h"
 #include "s2/s2cell.h"
 #include "s2/s2cell_id.h"
@@ -27,7 +33,9 @@
 #include "s2/s2edge_clipping.h"
 #include "s2/s2edge_crosser.h"
 #include "s2/s2latlng_rect.h"
+#include "s2/s2point.h"
 #include "s2/s2region.h"
+#include "s2/s2shape.h"
 #include "s2/s2shape_index.h"
 
 // This class wraps an S2ShapeIndex object with the additional methods needed
@@ -280,12 +288,12 @@ inline bool S2ShapeIndexRegion<IndexType>::Contains(
 
 template <class IndexType>
 bool S2ShapeIndexRegion<IndexType>::Contains(const S2Cell& target) const {
-  S2ShapeIndex::CellRelation relation = iter_.Locate(target.id());
+  S2CellRelation relation = iter_.Locate(target.id());
 
   // If the relation is DISJOINT, then "target" is not contained.  Similarly if
   // the relation is SUBDIVIDED then "target" is not contained, since index
   // cells are subdivided only if they (nearly) intersect too many edges.
-  if (relation != S2ShapeIndex::INDEXED) return false;
+  if (relation != S2CellRelation::INDEXED) return false;
 
   // Otherwise, the iterator points to an index cell containing "target".
   // If any shape contains the target cell, we return true.
@@ -311,14 +319,14 @@ bool S2ShapeIndexRegion<IndexType>::Contains(const S2Cell& target) const {
 
 template <class IndexType>
 bool S2ShapeIndexRegion<IndexType>::MayIntersect(const S2Cell& target) const {
-  S2ShapeIndex::CellRelation relation = iter_.Locate(target.id());
+  S2CellRelation relation = iter_.Locate(target.id());
 
   // If "target" does not overlap any index cell, there is no intersection.
-  if (relation == S2ShapeIndex::DISJOINT) return false;
+  if (relation == S2CellRelation::DISJOINT) return false;
 
   // If "target" is subdivided into one or more index cells, then there is an
   // intersection to within the S2ShapeIndex error bound.
-  if (relation == S2ShapeIndex::SUBDIVIDED) return true;
+  if (relation == S2CellRelation::SUBDIVIDED) return true;
 
   // Otherwise, the iterator points to an index cell containing "target".
   //
@@ -342,10 +350,10 @@ template <class IndexType>
 bool S2ShapeIndexRegion<IndexType>::VisitIntersectingShapes(
     const S2Cell& target, const ShapeVisitor& visitor) {
   switch (iter_.Locate(target.id())) {
-    case S2ShapeIndex::DISJOINT:
+    case S2CellRelation::DISJOINT:
       return true;
 
-    case S2ShapeIndex::SUBDIVIDED: {
+    case S2CellRelation::SUBDIVIDED: {
       // A shape contains the target cell iff it appears in at least one cell,
       // it contains the center of all cells, and it has no edges in any cell.
       // It is easier to keep track of whether a shape does *not* contain the
@@ -360,13 +368,17 @@ bool S2ShapeIndexRegion<IndexType>::VisitIntersectingShapes(
               clipped.num_edges() > 0 || !clipped.contains_center();
         }
       }
-      for (const auto& [shape_id, not_contains] : shape_not_contains) {
+      // TODO(user,b/210097200): Use structured bindings when we require
+      // C++17 in opensource.
+      for (const auto& p : shape_not_contains) {
+        const int shape_id = p.first;
+        const bool not_contains = p.second;
         if (!visitor(index().shape(shape_id), !not_contains)) return false;
       }
       return true;
     }
 
-    case S2ShapeIndex::INDEXED: {
+    case S2CellRelation::INDEXED: {
       const S2ShapeIndexCell& cell = iter_.cell();
       for (int s = 0; s < cell.num_clipped(); ++s) {
         // The shape contains the target cell iff the shape contains the cell
@@ -388,6 +400,7 @@ bool S2ShapeIndexRegion<IndexType>::VisitIntersectingShapes(
       return true;
     }
   }
+  ABSL_UNREACHABLE();
 }
 
 template <class IndexType>

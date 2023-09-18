@@ -17,13 +17,14 @@
 
 #include "s2/s2edge_crosser.h"
 
-#include <limits>
+#include <cmath>
+
 #include <vector>
 
-#include "s2/base/logging.h"
 #include <gtest/gtest.h>
 #include "s2/s2edge_crossings.h"
 #include "s2/s2edge_distances.h"
+#include "s2/s2point.h"
 #include "s2/s2pointutil.h"
 #include "s2/s2predicates.h"
 #include "s2/s2testing.h"
@@ -241,8 +242,8 @@ TEST(S2, CollinearEdgesThatDontTouch) {
   for (int iter = 0; iter < kIters; ++iter) {
     S2Point a = S2Testing::RandomPoint();
     S2Point d = S2Testing::RandomPoint();
-    S2Point b = S2::Interpolate(0.05, a, d);
-    S2Point c = S2::Interpolate(0.95, a, d);
+    S2Point b = S2::Interpolate(a, d, 0.05);
+    S2Point c = S2::Interpolate(a, d, 0.95);
     EXPECT_GT(0, S2::CrossingSign(a, b, c, d));
     EXPECT_GT(0, S2::CrossingSign(a, b, c, d));
     S2EdgeCrosser crosser(&a, &b, &c);

@@ -25,12 +25,14 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <string>
 
 #include <openssl/bn.h>
 #include <openssl/crypto.h>  // for OPENSSL_free
 
 #include "absl/base/macros.h"
 #include "absl/container/fixed_array.h"
+#include "absl/numeric/int128.h"
 
 #include "s2/base/integral_types.h"
 #include "s2/base/logging.h"
@@ -419,7 +421,7 @@ std::string ExactFloat::ToStringWithMaxDigits(int max_digits) const {
     // Use fixed format.  We split this into two cases depending on whether
     // the integer portion is non-zero or not.
     if (exp10 > 0) {
-      if (exp10 >= digits.size()) {
+      if (static_cast<size_t>(exp10) >= digits.size()) {
         str += digits;
         for (int i = exp10 - digits.size(); i > 0; --i) {
           str.push_back('0');

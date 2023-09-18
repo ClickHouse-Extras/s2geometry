@@ -17,14 +17,22 @@
 
 #include "s2/s2pointutil.h"
 
+#include <cmath>
+
+#include <string>
+
 #include <gtest/gtest.h>
+#include "s2/s1angle.h"
 #include "s2/s2cell.h"
+#include "s2/s2cell_id.h"
 #include "s2/s2coords.h"
 #include "s2/s2edge_distances.h"
 #include "s2/s2latlng.h"
 #include "s2/s2measures.h"
+#include "s2/s2point.h"
 #include "s2/s2predicates.h"
 #include "s2/s2testing.h"
+#include "s2/util/math/matrix3x3.h"
 
 TEST(S2, Frames) {
   Matrix3x3_d m;
@@ -79,8 +87,7 @@ TEST(S2, Rotate) {
     double distance = M_PI * pow(1e-15, S2Testing::rnd.RandDouble());
     // Sometimes choose points near the far side of the axis.
     if (S2Testing::rnd.OneIn(5)) distance = M_PI - distance;
-    S2Point p = S2::InterpolateAtDistance(S1Angle::Radians(distance),
-                                                  axis, target);
+    S2Point p = S2::GetPointOnLine(axis, target, S1Angle::Radians(distance));
     // Choose the rotation angle.
     double angle = 2 * M_PI * pow(1e-15, S2Testing::rnd.RandDouble());
     if (S2Testing::rnd.OneIn(3)) angle = -angle;

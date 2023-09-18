@@ -17,17 +17,22 @@
 
 #include "s2/s2crossing_edge_query.h"
 
+#include <cfloat>
+#include <cmath>
+
 #include <algorithm>
+#include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
 
-#include "absl/memory/memory.h"
 #include "absl/strings/str_cat.h"
 
 #include "s2/base/casts.h"
 #include "s2/mutable_s2shape_index.h"
+#include "s2/r2.h"
 #include "s2/s1angle.h"
 #include "s2/s2cap.h"
 #include "s2/s2cell.h"
@@ -38,17 +43,23 @@
 #include "s2/s2edge_distances.h"
 #include "s2/s2edge_vector_shape.h"
 #include "s2/s2metrics.h"
+#include "s2/s2padded_cell.h"
+#include "s2/s2point.h"
 #include "s2/s2polyline.h"
+#include "s2/s2shape.h"
+#include "s2/s2shape_index.h"
+#include "s2/s2shapeutil_shape_edge.h"
+#include "s2/s2shapeutil_shape_edge_id.h"
 #include "s2/s2testing.h"
 #include "s2/s2text_format.h"
 
-using absl::make_unique;
 using absl::StrCat;
 using s2shapeutil::ShapeEdge;
 using s2shapeutil::ShapeEdgeId;
-using s2textformat::MakePoint;
+using s2textformat::MakePointOrDie;
 using s2textformat::MakePolylineOrDie;
 using std::is_sorted;
+using std::make_unique;
 using std::pair;
 using std::string;
 using std::vector;
@@ -60,7 +71,7 @@ using CrossingType = s2shapeutil::CrossingType;
 
 S2Point PerturbAtDistance(S1Angle distance, const S2Point& a0,
                           const S2Point& b0) {
-  S2Point x = S2::InterpolateAtDistance(distance, a0, b0);
+  S2Point x = S2::GetPointOnLine(a0, b0, distance);
   if (S2Testing::rnd.OneIn(2)) {
     for (int i = 0; i < 3; ++i) {
       x[i] = nextafter(x[i], S2Testing::rnd.OneIn(2) ? 1 : -1);
@@ -310,8 +321,8 @@ TEST(GetCrossings, PolylineCrossings) {
       MakePolylineOrDie("1:0, 3:1, 1:2, 3:3, 1:4, 3:5, 1:6")));
   index.Add(make_unique<S2Polyline::OwningShape>(
       MakePolylineOrDie("2:0, 4:1, 2:2, 4:3, 2:4, 4:5, 2:6")));
-  TestPolylineCrossings(index, MakePoint("1:0"), MakePoint("1:4"));
-  TestPolylineCrossings(index, MakePoint("5:5"), MakePoint("6:6"));
+  TestPolylineCrossings(index, MakePointOrDie("1:0"), MakePointOrDie("1:4"));
+  TestPolylineCrossings(index, MakePointOrDie("5:5"), MakePointOrDie("6:6"));
 }
 
 TEST(GetCrossings, ShapeIdsAreCorrect) {
@@ -320,11 +331,11 @@ TEST(GetCrossings, ShapeIdsAreCorrect) {
   MutableS2ShapeIndex index;
   index.Add(make_unique<S2Polyline::OwningShape>(
       make_unique<S2Polyline>(S2Testing::MakeRegularPoints(
-          MakePoint("0:0"), S1Angle::Degrees(5), 100))));
+          MakePointOrDie("0:0"), S1Angle::Degrees(5), 100))));
   index.Add(make_unique<S2Polyline::OwningShape>(
       make_unique<S2Polyline>(S2Testing::MakeRegularPoints(
-          MakePoint("0:20"), S1Angle::Degrees(5), 100))));
-  TestPolylineCrossings(index, MakePoint("1:-10"), MakePoint("1:30"));
+          MakePointOrDie("0:20"), S1Angle::Degrees(5), 100))));
+  TestPolylineCrossings(index, MakePointOrDie("1:-10"), MakePointOrDie("1:30"));
 }
 
 // Verifies that when VisitCells() is called with a specified root cell and a

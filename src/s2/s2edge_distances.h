@@ -25,6 +25,7 @@
 #include <utility>
 
 #include "s2/base/logging.h"
+#include "absl/base/macros.h"
 #include "s2/s1angle.h"
 #include "s2/s1chord_angle.h"
 #include "s2/s2edge_crossings.h"
@@ -205,18 +206,6 @@ S2Point GetPointOnRay(const S2Point& origin, const S2Point& dir,
 // bounds the error perpendicular to the ray, not the error parallel to it.
 constexpr S1Angle kGetPointOnRayPerpendicularError = S1Angle::Radians(
     3 * s2pred::DBL_ERR);
-
-ABSL_DEPRECATED("Use Interpolate(a, b, t) instead.")
-inline S2Point Interpolate(double t, const S2Point& a, const S2Point& b) {
-  return Interpolate(a, b, t);
-}
-
-ABSL_DEPRECATED("Use GetPointOnLine(a, b, ax) instead.")
-inline S2Point InterpolateAtDistance(S1Angle ax, const S2Point& a,
-                                     const S2Point& b) {
-  return GetPointOnLine(a, b, ax);
-}
-
 
 /////////////////////////////////////////////////////////////////////////////
 ///////////////            (edge, edge) functions             ///////////////

@@ -18,6 +18,9 @@
 #ifndef S2_S2CELL_INDEX_H_
 #define S2_S2CELL_INDEX_H_
 
+#include <algorithm>
+#include <functional>
+#include <ostream>
 #include <vector>
 
 #include "absl/container/flat_hash_set.h"
@@ -128,6 +131,11 @@ class S2CellIndex {
       if (cell_id < y.cell_id) return true;
       if (y.cell_id < cell_id) return false;
       return label < y.label;
+    }
+
+    template <typename H>
+    friend H AbslHashValue(H h, LabelledCell x) {
+      return H::combine(std::move(h), x.cell_id, x.label);
     }
   };
 

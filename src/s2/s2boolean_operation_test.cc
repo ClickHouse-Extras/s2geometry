@@ -17,21 +17,25 @@
 
 #include "s2/s2boolean_operation.h"
 
+#include <cmath>
+
 #include <memory>
-#include <tuple>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include <gtest/gtest.h>
 
 #include "absl/flags/reflection.h"
 #include "absl/flags/flag.h"
-#include "absl/memory/memory.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
-#include "absl/strings/strip.h"
 
+#include "s2/base/commandlineflags_declare.h"
 #include "s2/mutable_s2shape_index.h"
+#include "s2/s1angle.h"
 #include "s2/s2builder.h"
 #include "s2/s2builder_graph.h"
 #include "s2/s2builder_layer.h"
@@ -40,14 +44,24 @@
 #include "s2/s2builderutil_s2polyline_vector_layer.h"
 #include "s2/s2builderutil_snap_functions.h"
 #include "s2/s2builderutil_testing.h"
+#include "s2/s2edge_crossings.h"
+#include "s2/s2error.h"
+#include "s2/s2latlng.h"
 #include "s2/s2lax_polygon_shape.h"
 #include "s2/s2lax_polyline_shape.h"
+#include "s2/s2loop.h"
+#include "s2/s2memory_tracker.h"
+#include "s2/s2point.h"
 #include "s2/s2point_vector_shape.h"
+#include "s2/s2pointutil.h"
 #include "s2/s2polygon.h"
 #include "s2/s2polyline.h"
+#include "s2/s2shape.h"
+#include "s2/s2shape_index.h"
 #include "s2/s2shapeutil_contains_brute_force.h"
 #include "s2/s2testing.h"
 #include "s2/s2text_format.h"
+#include "s2/util/math/matrix3x3.h"
 
 S2_DECLARE_int64(s2shape_index_tmp_memory_budget);
 
@@ -56,15 +70,15 @@ namespace {
 using absl::ByAnyChar;
 using absl::SkipEmpty;
 using absl::StrContains;
-using absl::StrSplit;
-using absl::make_unique;
 using absl::string_view;
+using absl::StrSplit;
 using s2builderutil::IndexMatchingLayer;
 using s2builderutil::LaxPolygonLayer;
 using s2shapeutil::ContainsBruteForce;
+using std::make_unique;
 using std::pair;
-using std::unique_ptr;
 using std::string;
+using std::unique_ptr;
 using std::vector;
 
 using EdgeType = S2Builder::EdgeType;
@@ -346,8 +360,8 @@ TEST(S2BooleanOperation, PointSemiOpenPolygonVertex) {
   // not the other under PolygonModel::SEMI_OPEN.  (The same vertices are used
   // for all three PolygonModel options.)
   auto polygon = s2textformat::MakePolygonOrDie("0:0, 0:1, 1:0");
-  ASSERT_TRUE(polygon->Contains(s2textformat::MakePoint("0:1")));
-  ASSERT_FALSE(polygon->Contains(s2textformat::MakePoint("1:0")));
+  ASSERT_TRUE(polygon->Contains(s2textformat::MakePointOrDie("0:1")));
+  ASSERT_FALSE(polygon->Contains(s2textformat::MakePointOrDie("1:0")));
   auto a = "0:1 | 1:0 # #";
   auto b = "# # 0:0, 0:1, 1:0";
   ExpectResult(OpType::UNION, options, a, b,
@@ -517,14 +531,14 @@ TEST(S2BooleanOperation, TestSemiOpenPolygonVerticesContained) {
   // Verify whether certain vertices of the test polygon are contained under
   // the semi-open boundary model (for use in the tests below).
   auto polygon = s2textformat::MakePolygonOrDie(kVertexTestPolygonStr());
-  EXPECT_TRUE(polygon->Contains(s2textformat::MakePoint("0:1")));
-  EXPECT_TRUE(polygon->Contains(s2textformat::MakePoint("0:2")));
-  EXPECT_TRUE(polygon->Contains(s2textformat::MakePoint("0:3")));
-  EXPECT_TRUE(polygon->Contains(s2textformat::MakePoint("0:4")));
-  EXPECT_FALSE(polygon->Contains(s2textformat::MakePoint("5:1")));
-  EXPECT_FALSE(polygon->Contains(s2textformat::MakePoint("5:2")));
-  EXPECT_FALSE(polygon->Contains(s2textformat::MakePoint("5:3")));
-  EXPECT_FALSE(polygon->Contains(s2textformat::MakePoint("5:4")));
+  EXPECT_TRUE(polygon->Contains(s2textformat::MakePointOrDie("0:1")));
+  EXPECT_TRUE(polygon->Contains(s2textformat::MakePointOrDie("0:2")));
+  EXPECT_TRUE(polygon->Contains(s2textformat::MakePointOrDie("0:3")));
+  EXPECT_TRUE(polygon->Contains(s2textformat::MakePointOrDie("0:4")));
+  EXPECT_FALSE(polygon->Contains(s2textformat::MakePointOrDie("5:1")));
+  EXPECT_FALSE(polygon->Contains(s2textformat::MakePointOrDie("5:2")));
+  EXPECT_FALSE(polygon->Contains(s2textformat::MakePointOrDie("5:3")));
+  EXPECT_FALSE(polygon->Contains(s2textformat::MakePointOrDie("5:4")));
 }
 
 // Don't bother testing every PolylineModel with every PolygonModel for vertex
@@ -775,10 +789,10 @@ TEST(S2BooleanOperation, PolylineEdgeOpenPolygonEdgeOverlap) {
 
 TEST(S2BooleanOperation, PolylineEdgeSemiOpenPolygonEdgeOverlap) {
   auto polygon = s2textformat::MakePolygonOrDie("1:1, 1:3, 3:3, 3:1");
-  ASSERT_FALSE(polygon->Contains(s2textformat::MakePoint("1:1")));
-  ASSERT_TRUE(polygon->Contains(s2textformat::MakePoint("1:3")));
-  ASSERT_FALSE(polygon->Contains(s2textformat::MakePoint("3:3")));
-  ASSERT_FALSE(polygon->Contains(s2textformat::MakePoint("3:1")));
+  ASSERT_FALSE(polygon->Contains(s2textformat::MakePointOrDie("1:1")));
+  ASSERT_TRUE(polygon->Contains(s2textformat::MakePointOrDie("1:3")));
+  ASSERT_FALSE(polygon->Contains(s2textformat::MakePointOrDie("3:3")));
+  ASSERT_FALSE(polygon->Contains(s2textformat::MakePointOrDie("3:1")));
   S2BooleanOperation::Options options;
   options.set_polygon_model(PolygonModel::SEMI_OPEN);
   auto a = "# 1:1, 1:3, 3:3 | 3:3, 1:3 # ";
@@ -1693,8 +1707,8 @@ TEST(S2BooleanOperation, SelfIntersectingPolylines) {
 
 // Subtracts a degenerate loop along the 180 degree meridian from the given
 // input geometry, and compares the result to "expected_str".  The inputs should
-// be in the format expected by s2textformat::MakeIndex().
-void TestMeridianSplitting(const char* input_str, const char* expected_str) {
+// be in the format expected by s2textformat::MakeIndexOrDie().
+void TestMeridianSplitting(string_view input_str, string_view expected_str) {
   auto input = s2textformat::MakeIndexOrDie(input_str);
   MutableS2ShapeIndex meridian;
   vector<vector<S2Point>> loops{{S2Point(0, 0, -1), S2Point(-1, 0, 0),
@@ -2051,7 +2065,7 @@ TEST(S2BooleanOperation, GetCrossedVertexIndexBug6) {
 }
 
 // Performs the given operation and compares the result to "expected_str".  All
-// arguments are in s2textformat::MakeLaxPolygon() format.
+// arguments are in s2textformat::MakeLaxPolygonOrDie() format.
 void ExpectPolygon(S2BooleanOperation::OpType op_type, const string& a_str,
                    const string& b_str, const string& expected_str) {
   auto a = s2textformat::MakeIndexOrDie(string("# # ") + a_str);
@@ -2070,7 +2084,8 @@ void ExpectPolygon(S2BooleanOperation::OpType op_type, const string& a_str,
 }
 
 TEST(S2BooleanOperation, FullAndEmptyResults) {
-  // The following constants are all in s2textformat::MakeLaxPolygon() format.
+  // The following constants are all in s2textformat::MakeLaxPolygonOrDie()
+  // format.
   string kEmpty = "";
   string kFull = "full";
 

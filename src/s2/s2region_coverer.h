@@ -18,17 +18,21 @@
 #ifndef S2_S2REGION_COVERER_H_
 #define S2_S2REGION_COVERER_H_
 
+#include <algorithm>
 #include <cstddef>
 #include <new>
 #include <queue>
 #include <utility>
 #include <vector>
 
+#include "absl/base/casts.h"
 #include "absl/base/macros.h"
 #include "s2/_fp_contract_off.h"
 #include "s2/s2cell.h"
 #include "s2/s2cell_id.h"
 #include "s2/s2cell_union.h"
+#include "s2/s2point.h"
+#include "s2/s2region.h"
 
 class S2Region;
 

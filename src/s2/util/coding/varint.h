@@ -36,6 +36,7 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
 
 #include "s2/base/integral_types.h"
 #include "s2/base/port.h"
@@ -291,11 +292,11 @@ inline const char* Varint::Parse32WithLimit(const char* p, const char* l,
 
  inline const char* Varint::Parse64(const char* p, uint64* OUTPUT) {
 #if defined(__x86_64__)
-   auto ptr = reinterpret_cast<const int8*>(p);
-   int64 byte = *ptr;
-   if (byte >= 0) {
-     *OUTPUT = byte;
-     return reinterpret_cast<const char*>(ptr) + 1;
+  auto ptr = reinterpret_cast<const int8*>(p);
+  int64 byte = *ptr;
+  if (byte >= 0) {
+    *OUTPUT = static_cast<uint64>(byte);
+    return reinterpret_cast<const char*>(ptr) + 1;
   } else {
     auto tmp = Parse64FallbackPair(p, byte);
     if (ABSL_PREDICT_TRUE(tmp.first)) *OUTPUT = tmp.second;
@@ -395,7 +396,7 @@ inline int Varint::Length32(uint32 v) {
   // Use an explicit multiplication to implement the divide of
   // a number in the 1..31 range.
   // Explicit OR 0x1 to handle v == 0.
-  uint32 log2value = Bits::Log2FloorNonZero(v | 0x1);
+  uint32 log2value = static_cast<uint32>(Bits::Log2FloorNonZero(v | 0x1));
   return static_cast<int>((log2value * 9 + 73) / 64);
 }
 
@@ -404,7 +405,7 @@ inline int Varint::Length64(uint64 v) {
   // Use an explicit multiplication to implement the divide of
   // a number in the 1..63 range.
   // Explicit OR 0x1 to handle v == 0.
-  uint32 log2value = Bits::Log2FloorNonZero64(v | 0x1);
+  uint32 log2value = static_cast<uint32>(Bits::Log2FloorNonZero64(v | 0x1));
   return static_cast<int>((log2value * 9 + 73) / 64);
 }
 

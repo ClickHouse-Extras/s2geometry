@@ -17,19 +17,20 @@
 
 #include "s2/s2region_coverer.h"
 
+#include <climits>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <limits>
 #include <queue>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
 
 #include "absl/container/flat_hash_map.h"
-#include "absl/flags/flag.h"
-#include "absl/memory/memory.h"
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_split.h"
@@ -39,6 +40,7 @@
 #include "s2/base/logging.h"
 #include "s2/base/log_severity.h"
 #include "s2/s1angle.h"
+#include "s2/s1chord_angle.h"
 #include "s2/s2cap.h"
 #include "s2/s2cell.h"
 #include "s2/s2cell_id.h"
@@ -65,9 +67,8 @@ S2_DEFINE_int32(iters, google::DEBUG_MODE ? 1000 : 100000,
 
 namespace {
 
-using absl::SimpleAtoi;
-using absl::StrCat;
 using absl::flat_hash_map;
+using absl::StrCat;
 using std::max;
 using std::min;
 using std::priority_queue;
@@ -105,7 +106,10 @@ static void CheckCovering(const S2RegionCoverer::Options& options,
   if (covering.size() > options.max_cells()) {
     // If the covering has more than the requested number of cells, then check
     // that the cell count cannot be reduced by using the parent of some cell.
-    for (const auto [_, cells] : min_level_cells) {
+    // TODO(user,b/210097200): Use structured bindings when we require
+    // C++17 in opensource.
+    for (const auto& p : min_level_cells) {
+      const int cells = p.second;
       EXPECT_EQ(cells, 1);
     }
   }
@@ -415,10 +419,10 @@ TEST(IsCanonical, Normalized) {
        "1/1130", "1/1131", "1/1132", "1/1133"}, options));
 }
 
-void TestCanonicalizeCovering(
-    const vector<string>& input_str,
-    const vector<string>& expected_str,
-    const S2RegionCoverer::Options& options) {
+void TestCanonicalizeCovering(const vector<string>& input_str,
+                              const vector<string>& expected_str,
+                              const S2RegionCoverer::Options& options,
+                              const bool test_cell_union = true) {
   vector<S2CellId> actual, expected;
   for (const auto& str : input_str) {
     actual.push_back(S2CellId::FromDebugString(str));
@@ -428,6 +432,24 @@ void TestCanonicalizeCovering(
   }
   S2RegionCoverer coverer(options);
   EXPECT_FALSE(coverer.IsCanonical(actual));
+
+  if (test_cell_union) {
+    // Test version taking and returning an `S2CellUnion`; this must be done
+    // first, since we use `actual` here and the other version modifies its
+    // argument.
+    const S2CellUnion input_union(actual);
+    // Non-canonical input may become canonical after (or vice versa) after
+    // converting to S2CellUnion, so don't test whether or not the input is
+    // canonical.
+    const S2CellUnion actual_union = coverer.CanonicalizeCovering(input_union);
+    EXPECT_EQ(expected, actual_union.cell_ids());
+    EXPECT_TRUE(coverer.IsCanonical(actual_union.cell_ids()));
+    EXPECT_TRUE(coverer.IsCanonical(actual_union));
+    // `actual` didn't change.
+    EXPECT_FALSE(coverer.IsCanonical(actual));
+  }
+
+  // Test modifying version.
   coverer.CanonicalizeCovering(&actual);
   EXPECT_TRUE(coverer.IsCanonical(actual));
   vector<string> actual_str;
@@ -473,8 +495,10 @@ TEST(CanonicalizeCovering, DenormalizedCellUnion) {
   options.set_level_mod(2);
   TestCanonicalizeCovering(
       {"0/", "1/130", "1/131", "1/132", "1/133"},
-      {"0/0", "0/1", "0/2", "0/3", "1/130", "1/131", "1/132", "1/133"},
-      options);
+      {"0/0", "0/1", "0/2", "0/3", "1/130", "1/131", "1/132", "1/133"}, options,
+      // Denormalized input will be changed by the `S2CellUnion` variants,
+      // so don't test it.
+      /*test_cell_union=*/false);
 }
 
 TEST(CanonicalizeCovering, MaxCellsMergesSmallest) {

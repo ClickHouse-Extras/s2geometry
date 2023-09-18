@@ -17,14 +17,17 @@
 
 #include "s2/s2shapeutil_count_edges.h"
 
+#include <memory>
+
 #include <gtest/gtest.h>
 #include "s2/mutable_s2shape_index.h"
+#include "s2/s2shape.h"
 #include "s2/s2text_format.h"
 
 namespace {
 
 TEST(CountEdgesUpTo, StopsEarly) {
-  auto index = s2textformat::MakeIndex(
+  auto index = s2textformat::MakeIndexOrDie(
       "0:0 | 0:1 | 0:2 | 0:3 | 0:4 # 1:0, 1:1 | 1:2, 1:3 | 1:4, 1:5, 1:6 #");
   // Verify the test parameters.
   ASSERT_EQ(index->num_shape_ids(), 4);

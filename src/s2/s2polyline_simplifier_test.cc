@@ -18,34 +18,38 @@
 #include "s2/s2polyline_simplifier.h"
 
 #include <cfloat>
+#include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
+#include "absl/strings/string_view.h"
 #include "s2/s1angle.h"
 #include "s2/s1chord_angle.h"
 #include "s2/s2edge_crossings.h"
 #include "s2/s2edge_distances.h"
-#include "s2/s2pointutil.h"
+#include "s2/s2point.h"
 #include "s2/s2testing.h"
 #include "s2/s2text_format.h"
 
-void CheckSimplify(const char* src, const char* dst,
-                   const char* target, const char* avoid,
-                   const std::vector<bool>& disc_on_left,
+using absl::string_view;
+using std::vector;
+
+void CheckSimplify(string_view src, string_view dst, string_view target,
+                   string_view avoid, const vector<bool>& disc_on_left,
                    double radius_degrees, bool expected_result) {
   S1ChordAngle radius(S1Angle::Degrees(radius_degrees));
   S2PolylineSimplifier s;
-  s.Init(s2textformat::MakePoint(src));
-  for (const S2Point& p : s2textformat::ParsePoints(target)) {
+  s.Init(s2textformat::MakePointOrDie(src));
+  for (const S2Point& p : s2textformat::ParsePointsOrDie(target)) {
     s.TargetDisc(p, radius);
   }
   int i = 0;
-  for (const S2Point& p : s2textformat::ParsePoints(avoid)) {
+  for (const S2Point& p : s2textformat::ParsePointsOrDie(avoid)) {
     s.AvoidDisc(p, radius, disc_on_left[i++]);
   }
-  EXPECT_EQ(expected_result, s.Extend(s2textformat::MakePoint(dst)))
-      << "\nsrc = " << src << "\ndst = " << dst
-      << "\ntarget = " << target << "\navoid = " << avoid;
+  EXPECT_EQ(expected_result, s.Extend(s2textformat::MakePointOrDie(dst)))
+      << "\nsrc = " << src << "\ndst = " << dst << "\ntarget = " << target
+      << "\navoid = " << avoid;
 }
 
 TEST(S2PolylineSimplifier, Reuse) {
@@ -57,7 +61,7 @@ TEST(S2PolylineSimplifier, Reuse) {
   EXPECT_TRUE(s.TargetDisc(S2Point(1, 1, 0.1).Normalize(), radius));
   EXPECT_FALSE(s.Extend(S2Point(1, 1, 0.4).Normalize()));
 
-  // s.Init(S2Point(0, 1, 0));
+  s.Init(S2Point(0, 1, 0));
   EXPECT_TRUE(s.TargetDisc(S2Point(1, 1, 0.3).Normalize(), radius));
   EXPECT_TRUE(s.TargetDisc(S2Point(1, 1, 0.2).Normalize(), radius));
   EXPECT_FALSE(s.Extend(S2Point(1, 1, 0).Normalize()));
@@ -146,7 +150,7 @@ TEST(S2PolylineSimplifier, TargetAndAvoid) {
 
 TEST(S2PolylineSimplifier, Precision) {
   // This is a rough upper bound on both the error in constructing the disc
-  // locations (i.e., S2::InterpolateAtDistance, etc), and also on the
+  // locations (i.e., S2::GetPointOnLine, etc.), and also on the
   // padding that S2PolylineSimplifier uses to ensure that its results are
   // conservative (i.e., the error calculated by GetSemiwidth).
   const S1Angle kMaxError = S1Angle::Radians(25 * DBL_EPSILON);
@@ -161,9 +165,9 @@ TEST(S2PolylineSimplifier, Precision) {
     S2Testing::rnd.Reset(iter + 1);  // Easier to reproduce a specific case.
     S2Point src = S2Testing::RandomPoint();
     simplifier.Init(src);
-    S2Point dst = S2::InterpolateAtDistance(
-        S1Angle::Radians(S2Testing::rnd.RandDouble()),
-        src, S2Testing::RandomPoint());
+    S2Point dst =
+        S2::GetPointOnLine(src, S2Testing::RandomPoint(),
+                           S1Angle::Radians(S2Testing::rnd.RandDouble()));
     S2Point n = S2::RobustCrossProd(src, dst).Normalize();
 
     // If bad_disc >= 0, then we make targeting fail for that disc.
@@ -177,7 +181,7 @@ TEST(S2PolylineSimplifier, Precision) {
       S2Point a = ((1 - f) * src + f * dst).Normalize();
       S1Angle r = S1Angle::Radians(S2Testing::rnd.RandDouble());
       bool on_left = S2Testing::rnd.OneIn(2);
-      S2Point x = S2::InterpolateAtDistance(r, a, on_left ? n : -n);
+      S2Point x = S2::GetPointOnLine(a, on_left ? n : -n, r);
       // If the disc is behind "src", adjust its radius so that it just
       // touches "src" rather than just touching the line through (src, dst).
       if (f < 0) r = S1Angle(src, x);

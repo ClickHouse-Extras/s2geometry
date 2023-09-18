@@ -17,20 +17,31 @@
 
 #include "s2/s2latlng_rect_bounder.h"
 
+#include <cmath>
+
 #include <cfloat>
+#include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
 
 #include "absl/strings/str_cat.h"
 
+#include "s2/base/integral_types.h"
+#include "s2/r1interval.h"
+#include "s2/s1angle.h"
+#include "s2/s1interval.h"
 #include "s2/s2edge_crossings.h"
 #include "s2/s2edge_distances.h"
+#include "s2/s2latlng.h"
+#include "s2/s2latlng_rect.h"
+#include "s2/s2point.h"
 #include "s2/s2pointutil.h"
 #include "s2/s2predicates.h"
 #include "s2/s2testing.h"
 
 using absl::StrCat;
+using std::vector;
 
 S2LatLngRect GetEdgeBound(const S2Point& a, const S2Point& b) {
   S2LatLngRectBounder bounder;
@@ -131,12 +142,12 @@ S2Point PerturbATowardsB(const S2Point& a, const S2Point& b) {
   }
   if (choice < 0.5) {
     // Return a point such that the distance squared to A will underflow.
-    return S2::InterpolateAtDistance(S1Angle::Radians(1e-300), a, b);
+    return S2::GetPointOnLine(a, b, S1Angle::Radians(1e-300));
   }
   // Otherwise return a point whose distance from A is near DBL_EPSILON such
   // that the log of the pdf is uniformly distributed.
   double distance = DBL_EPSILON * 1e-5 * pow(1e6, rnd->RandDouble());
-  return S2::InterpolateAtDistance(S1Angle::Radians(distance), a, b);
+  return S2::GetPointOnLine(a, b, S1Angle::Radians(distance));
 }
 
 S2Point RandomPole() {
