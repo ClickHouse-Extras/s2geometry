@@ -25,6 +25,7 @@
 #include <utility>
 
 #include "absl/container/btree_map.h"
+#include "absl/log/absl_check.h"
 
 #include "s2/s2cell_id.h"
 #include "s2/s2cell_iterator.h"
@@ -233,7 +234,7 @@ class S2PointIndex {
     }
 
    private:
-    const Map* map_;
+    const Map* map_ = nullptr;
     typename Map::const_iterator iter_, end_;
   };
 
@@ -305,8 +306,7 @@ size_t S2PointIndex<Data>::SpaceUsed() const {
 }
 
 template <class Data>
-inline S2PointIndex<Data>::Iterator::Iterator() : map_(nullptr) {
-}
+inline S2PointIndex<Data>::Iterator::Iterator() = default;
 
 template <class Data>
 inline S2PointIndex<Data>::Iterator::Iterator(
@@ -324,26 +324,26 @@ inline void S2PointIndex<Data>::Iterator::Init(
 
 template <class Data>
 inline S2CellId S2PointIndex<Data>::Iterator::id() const {
-  S2_DCHECK(!done());
+  ABSL_DCHECK(!done());
   return iter_->first;
 }
 
 template <class Data>
 inline const S2Point& S2PointIndex<Data>::Iterator::point() const {
-  S2_DCHECK(!done());
+  ABSL_DCHECK(!done());
   return iter_->second.point();
 }
 
 template <class Data>
 inline const Data& S2PointIndex<Data>::Iterator::data() const {
-  S2_DCHECK(!done());
+  ABSL_DCHECK(!done());
   return iter_->second.data();
 }
 
 template <class Data>
 inline const typename S2PointIndex<Data>::PointData&
 S2PointIndex<Data>::Iterator::point_data() const {
-  S2_DCHECK(!done());
+  ABSL_DCHECK(!done());
   return iter_->second;
 }
 
@@ -364,7 +364,7 @@ inline void S2PointIndex<Data>::Iterator::Finish() {
 
 template <class Data>
 inline void S2PointIndex<Data>::Iterator::Next() {
-  S2_DCHECK(!done());
+  ABSL_DCHECK(!done());
   ++iter_;
 }
 

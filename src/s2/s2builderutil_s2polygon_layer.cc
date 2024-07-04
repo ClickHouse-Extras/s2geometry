@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "absl/container/btree_map.h"
+#include "absl/log/absl_check.h"
 #include "s2/id_set_lexicon.h"
 #include "s2/s2builder.h"
 #include "s2/s2builder_graph.h"
@@ -66,7 +67,7 @@ S2PolygonLayer::S2PolygonLayer(
 void S2PolygonLayer::Init(
     S2Polygon* polygon, LabelSetIds* label_set_ids,
     IdSetLexicon* label_set_lexicon, const Options& options) {
-  S2_DCHECK_EQ(label_set_ids == nullptr, label_set_lexicon == nullptr);
+  ABSL_DCHECK_EQ(label_set_ids == nullptr, label_set_lexicon == nullptr);
   polygon_ = polygon;
   label_set_ids_ = label_set_ids;
   label_set_lexicon_ = label_set_lexicon;
@@ -131,7 +132,7 @@ void S2PolygonLayer::ReorderEdgeLabels(const LoopMap& loop_map) {
   if (!label_set_ids_) return;
   LabelSetIds new_ids(label_set_ids_->size());
   for (int i = 0; i < polygon_->num_loops(); ++i) {
-    S2Loop* loop = polygon_->loop(i);
+    const S2Loop* loop = polygon_->loop(i);
     const pair<int, bool>& old = loop_map.find(loop)->second;
     new_ids[i].swap((*label_set_ids_)[old.first]);
     if (loop->contains_origin() != old.second) {

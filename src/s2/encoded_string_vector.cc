@@ -23,7 +23,6 @@
 #include <string>
 #include <vector>
 
-#include "s2/base/integral_types.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "s2/util/coding/coder.h"
@@ -42,7 +41,7 @@ StringVectorEncoder::StringVectorEncoder() = default;
 void StringVectorEncoder::Encode(Encoder* encoder) {
   offsets_.push_back(data_.length());
   // We don't encode the first element of "offsets_", which is always zero.
-  EncodeUintVector<uint64>(
+  EncodeUintVector<uint64_t>(
       MakeSpan(offsets_.data() + 1, offsets_.data() + offsets_.size()),
       encoder);
   encoder->Ensure(data_.length());
@@ -58,11 +57,16 @@ void StringVectorEncoder::Encode(Span<const string> v, Encoder* encoder) {
 bool EncodedStringVector::Init(Decoder* decoder) {
   if (!offsets_.Init(decoder)) return false;
   data_ = decoder->skip(0);
-  if (offsets_.size() > 0) {
-    uint64 length = offsets_[offsets_.size() - 1];
-    if (decoder->avail() < length) return false;
-    decoder->skip(length);
+  uint64_t length = 0;
+  for (int i = 0, n = offsets_.size(); i < n; ++i) {
+    // Strings are packed sequentially, offsets_[i] representing end of item i.
+    // String length is diff of two sequential offsets, thus the offsets should
+    // not decrease, otherwise we might read memory beyond the end of data.
+    if (offsets_[i] < length) return false;
+    length = offsets_[i];
   }
+  if (decoder->avail() < length) return false;
+  decoder->skip(length);
   return true;
 }
 
@@ -80,7 +84,7 @@ void EncodedStringVector::Encode(Encoder* encoder) const {
   offsets_.Encode(encoder);
 
   if (offsets_.size() > 0) {
-    const uint64 length = offsets_[offsets_.size() - 1];
+    const uint64_t length = offsets_[offsets_.size() - 1];
     encoder->Ensure(length);
     encoder->putn(data_, length);
   }

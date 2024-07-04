@@ -20,9 +20,10 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <cstdint>
 #include <memory>
 
-#include "s2/base/integral_types.h"
+#include "absl/log/absl_check.h"
 #include "s2/s1angle.h"
 #include "s2/s2builder.h"
 #include "s2/s2cell_id.h"
@@ -50,7 +51,7 @@ IdentitySnapFunction::IdentitySnapFunction(S1Angle snap_radius) {
 }
 
 void IdentitySnapFunction::set_snap_radius(S1Angle snap_radius) {
-  S2_DCHECK_LE(snap_radius, kMaxSnapRadius());
+  ABSL_DCHECK_LE(snap_radius, kMaxSnapRadius());
   snap_radius_ = snap_radius;
 }
 
@@ -88,8 +89,8 @@ S2CellIdSnapFunction::S2CellIdSnapFunction(int level) {
 }
 
 void S2CellIdSnapFunction::set_level(int level) {
-  S2_DCHECK_GE(level, 0);
-  S2_DCHECK_LE(level, S2CellId::kMaxLevel);
+  ABSL_DCHECK_GE(level, 0);
+  ABSL_DCHECK_LE(level, S2CellId::kMaxLevel);
   level_ = level;
   set_snap_radius(MinSnapRadiusForLevel(level));
 }
@@ -99,8 +100,8 @@ int S2CellIdSnapFunction::level() const {
 }
 
 void S2CellIdSnapFunction::set_snap_radius(S1Angle snap_radius) {
-  S2_DCHECK_GE(snap_radius, MinSnapRadiusForLevel(level()));
-  S2_DCHECK_LE(snap_radius, kMaxSnapRadius());
+  ABSL_DCHECK_GE(snap_radius, MinSnapRadiusForLevel(level()));
+  ABSL_DCHECK_LE(snap_radius, kMaxSnapRadius());
   snap_radius_ = snap_radius;
 }
 
@@ -209,17 +210,15 @@ unique_ptr<S2Builder::SnapFunction> S2CellIdSnapFunction::Clone() const {
   return make_unique<S2CellIdSnapFunction>(*this);
 }
 
-IntLatLngSnapFunction::IntLatLngSnapFunction()
-    : exponent_(-1), snap_radius_(), from_degrees_(0), to_degrees_(0) {
-}
+IntLatLngSnapFunction::IntLatLngSnapFunction() = default;
 
 IntLatLngSnapFunction::IntLatLngSnapFunction(int exponent) {
   set_exponent(exponent);
 }
 
 void IntLatLngSnapFunction::set_exponent(int exponent) {
-  S2_DCHECK_GE(exponent, kMinExponent);
-  S2_DCHECK_LE(exponent, kMaxExponent);
+  ABSL_DCHECK_GE(exponent, kMinExponent);
+  ABSL_DCHECK_LE(exponent, kMaxExponent);
   exponent_ = exponent;
   set_snap_radius(MinSnapRadiusForExponent(exponent));
 
@@ -237,8 +236,8 @@ int IntLatLngSnapFunction::exponent() const {
 }
 
 void IntLatLngSnapFunction::set_snap_radius(S1Angle snap_radius) {
-  S2_DCHECK_GE(snap_radius, MinSnapRadiusForExponent(exponent()));
-  S2_DCHECK_LE(snap_radius, kMaxSnapRadius());
+  ABSL_DCHECK_GE(snap_radius, MinSnapRadiusForExponent(exponent()));
+  ABSL_DCHECK_LE(snap_radius, kMaxSnapRadius());
   snap_radius_ = snap_radius;
 }
 
@@ -343,10 +342,10 @@ S1Angle IntLatLngSnapFunction::min_edge_vertex_separation() const {
 }
 
 S2Point IntLatLngSnapFunction::SnapPoint(const S2Point& point) const {
-  S2_DCHECK_GE(exponent_, 0);  // Make sure the snap function was initialized.
+  ABSL_DCHECK_GE(exponent_, 0);  // Make sure the snap function was initialized.
   S2LatLng input(point);
-  int64 lat = MathUtil::FastInt64Round(input.lat().degrees() * from_degrees_);
-  int64 lng = MathUtil::FastInt64Round(input.lng().degrees() * from_degrees_);
+  int64_t lat = MathUtil::FastInt64Round(input.lat().degrees() * from_degrees_);
+  int64_t lng = MathUtil::FastInt64Round(input.lng().degrees() * from_degrees_);
   return S2LatLng::FromDegrees(lat * to_degrees_, lng * to_degrees_).ToPoint();
 }
 

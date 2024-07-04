@@ -22,15 +22,15 @@
 #include <bitset>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
 #include "absl/base/macros.h"
+#include "absl/log/absl_check.h"
 #include "absl/types/span.h"
 
-#include "s2/base/integral_types.h"
-#include "s2/base/logging.h"
-#include "s2/_fp_contract_off.h"
+#include "s2/_fp_contract_off.h"  // IWYU pragma: keep
 #include "s2/mutable_s2shape_index.h"
 #include "s2/s1angle.h"
 #include "s2/s1chord_angle.h"
@@ -98,10 +98,8 @@ class S2Loop final : public S2Region {
   // Decode() before it is used.
   S2Loop();
 
-#ifndef SWIG
-  S2Loop(S2Loop&&);
-  S2Loop& operator=(S2Loop&&);
-#endif
+  S2Loop(S2Loop&&) noexcept;
+  S2Loop& operator=(S2Loop&&) noexcept;
 
   // Convenience constructor that calls Init() with the given vertices.
   explicit S2Loop(absl::Span<const S2Point> vertices);
@@ -134,11 +132,11 @@ class S2Loop final : public S2Region {
   //
   // The loop may be safely encoded lossily (e.g. by snapping it to an S2Cell
   // center) as long as its position does not move by 90 degrees or more.
-  static std::vector<S2Point> kEmpty();
+  static absl::Span<const S2Point> kEmpty();
 
   // A special vertex chain of length 1 that creates a full loop (i.e., a loop
   // with no edges that contains all points).  See kEmpty() for details.
-  static std::vector<S2Point> kFull();
+  static absl::Span<const S2Point> kFull();
 
   // Construct a loop corresponding to the given cell.
   //
@@ -189,8 +187,8 @@ class S2Loop final : public S2Region {
   //
   // REQUIRES: 0 <= i < 2 * num_vertices()
   const S2Point& vertex(int i) const {
-    S2_DCHECK_GE(i, 0);
-    S2_DCHECK_LT(i, 2 * num_vertices());
+    ABSL_DCHECK_GE(i, 0);
+    ABSL_DCHECK_LT(i, 2 * num_vertices());
     int j = i - num_vertices();
     return vertices_[j < 0 ? i : j];
   }
@@ -203,8 +201,8 @@ class S2Loop final : public S2Region {
   //
   // REQUIRES: 0 <= i < 2 * num_vertices()
   const S2Point& oriented_vertex(int i) const {
-    S2_DCHECK_GE(i, 0);
-    S2_DCHECK_LT(i, 2 * num_vertices());
+    ABSL_DCHECK_GE(i, 0);
+    ABSL_DCHECK_LT(i, 2 * num_vertices());
     int j = i - num_vertices();
     if (j < 0) j = i;
     if (is_hole()) j = num_vertices() - 1 - j;
@@ -403,6 +401,7 @@ class S2Loop final : public S2Region {
   // if the loop contains a point P, then the bound contains P also.
   S2Cap GetCapBound() const override;
   S2LatLngRect GetRectBound() const override { return bound_; }
+  void GetCellUnionBound(std::vector<S2CellId>* cell_ids) const override;
 
   bool Contains(const S2Cell& cell) const override;
   bool MayIntersect(const S2Cell& cell) const override;
@@ -430,35 +429,36 @@ class S2Loop final : public S2Region {
   ////////////////////////////////////////////////////////////////////////
   // Methods intended primarily for use by the S2Polygon implementation:
 
-  // Given two loops of a polygon, return true if A contains B.  This version
-  // of Contains() is cheap because it does not test for edge intersections.
-  // The loops must meet all the S2Polygon requirements; for example this
-  // implies that their boundaries may not cross or have any shared edges
-  // (although they may have shared vertices).
+  // Given two loops of a polygon, return true if this loop A contains B.  This
+  // version of Contains() is cheap because it does not test for edge
+  // intersections. The loops must meet all the S2Polygon requirements; for
+  // example this implies that their boundaries may not cross or have any shared
+  // edges (although they may have shared vertices).
   bool ContainsNested(const S2Loop& b) const;
 
-  // Returns +1 if A contains the boundary of B, -1 if A excludes the boundary
-  // of B, and 0 if the boundaries of A and B cross.  Shared edges are handled
-  // as follows: If XY is a shared edge, define Reversed(XY) to be true if XY
-  // appears in opposite directions in A and B.  Then A contains XY if and
-  // only if Reversed(XY) == B->is_hole().  (Intuitively, this checks whether
-  // A contains a vanishingly small region extending from the boundary of B
-  // toward the interior of the polygon to which loop B belongs.)
+  // Returns +1 if this loop A contains the boundary of B, -1 if A excludes the
+  // boundary of B, and 0 if the boundaries of A and B cross.  Shared edges are
+  // handled as follows: If XY is a shared edge, define Reversed(XY) to be true
+  // if XY appears in opposite directions in A and B.  Then A contains XY if and
+  // only if Reversed(XY) == B->is_hole().  (Intuitively, this checks whether A
+  // contains a vanishingly small region extending from the boundary of B toward
+  // the interior of the polygon to which loop B belongs.)
   //
   // This method is used for testing containment and intersection of
   // multi-loop polygons.  Note that this method is not symmetric, since the
-  // result depends on the direction of loop A but not on the direction of
+  // result depends on the direction of this loop A but not on the direction of
   // loop B (in the absence of shared edges).
   //
   // REQUIRES: neither loop is empty.
   // REQUIRES: if b->is_full(), then !b->is_hole().
   int CompareBoundary(const S2Loop& b) const;
 
-  // Given two loops whose boundaries do not cross (see CompareBoundary),
-  // return true if A contains the boundary of B.  If "reverse_b" is true, the
-  // boundary of B is reversed first (which only affects the result when there
-  // are shared edges).  This method is cheaper than CompareBoundary() because
-  // it does not test for edge intersections.
+  // Given another loop 'B' whose boundaries does not cross this loop's
+  // boundaries (see CompareBoundary), return true if this loop contains the
+  // boundary of B. If "reverse_b" is true, the boundary of B is reversed first
+  // (which only affects the result when there are shared edges).  This method
+  // is cheaper than CompareBoundary() because it does not test for edge
+  // intersections.
   //
   // REQUIRES: neither loop is empty.
   // REQUIRES: if b->is_full(), then reverse_b == false.
@@ -470,13 +470,12 @@ class S2Loop final : public S2Region {
   // class does not take ownership of the loop itself (see OwningShape below).
   // You can also subtype this class to store additional data (see S2Shape for
   // details).
-#ifndef SWIG
   class Shape : public S2Shape {
     // To update `loop_` in `S2Loop` move constructor/assignment.
     friend class S2Loop;
 
    public:
-    Shape() : loop_(nullptr) {}  // Must call Init().
+    Shape() = default;  // Must call Init().
 
     // Initialize the shape.  Does not take ownership of "loop".
     explicit Shape(const S2Loop* loop) { Init(loop); }
@@ -498,7 +497,7 @@ class S2Loop final : public S2Region {
     int num_chains() const final;
     Chain chain(int i) const final;
     Edge chain_edge(int i, int j) const final {
-      S2_DCHECK_EQ(i, 0);
+      ABSL_DCHECK_EQ(i, 0);
       return Edge(loop_->vertex(j), loop_->vertex(j + 1));
     }
     ChainPosition chain_position(int e) const final {
@@ -510,7 +509,7 @@ class S2Loop final : public S2Region {
     friend class S2Loop;
     friend class S2LoopTestBase;
 
-    const S2Loop* loop_;
+    const S2Loop* loop_ = nullptr;
   };
 
   // Like Shape, except that the S2Loop is automatically deleted when this
@@ -527,7 +526,10 @@ class S2Loop final : public S2Region {
     }
     ~OwningShape() override { delete loop(); }
   };
-#endif  // SWIG
+
+  // Force build the index.  This should not usually be called and is intended
+  // only to remove index construction from the inner loop of benchmarks.
+  void ForceBuildIndex() { index_.ForceBuild(); }
 
  private:
   // All of the following need access to contains_origin().  Possibly this
@@ -549,11 +551,15 @@ class S2Loop final : public S2Region {
   // Returns true if this loop contains S2::Origin().
   bool contains_origin() const { return origin_inside_; }
 
+  // Any single-vertex loop is interpreted as being either the empty loop or the
+  // full loop, depending on whether the vertex is in the northern or southern
+  // hemisphere respectively.
+
   // The single vertex in the "empty loop" vertex chain.
-  static S2Point kEmptyVertex();
+  static const S2Point kEmptyVertex;
 
   // The single vertex in the "full loop" vertex chain.
-  static S2Point kFullVertex();
+  static const S2Point kFullVertex;
 
   void InitOriginAndBound();
   void InitBound();
@@ -646,8 +652,9 @@ class S2Loop final : public S2Region {
   int depth_ = 0;
 
   // We store the vertices in an array rather than a vector because we don't
-  // need any STL methods, and computing the number of vertices using size()
-  // would be relatively expensive (due to division by sizeof(S2Point) == 24).
+  // need any STL methods, and computing the number of vertices using `size()`
+  // would be somewhat more expensive (due to division by `sizeof(S2Point) ==
+  // 24`, although this is typically implemented with a multiply and shift).
   int num_vertices_ = 0;
   std::unique_ptr<S2Point[]> vertices_;
 
@@ -659,7 +666,7 @@ class S2Loop final : public S2Region {
   // force implementation that is also relatively cheap.  For this one method
   // we keep track of the number of calls made and only build the index once
   // enough calls have been made that we think an index would be worthwhile.
-  mutable std::atomic<int32> unindexed_contains_calls_;
+  mutable std::atomic<int32_t> unindexed_contains_calls_{0};
 
   // "bound_" is a conservative bound on all points contained by this loop:
   // if A.Contains(P), then A.bound_.Contains(S2LatLng(P)).
@@ -674,28 +681,18 @@ class S2Loop final : public S2Region {
   // Spatial index for this loop.
   MutableS2ShapeIndex index_;
 
-  // SWIG doesn't understand "= delete".
-#ifndef SWIG
   void operator=(const S2Loop&) = delete;
-#endif  // SWIG
 };
 
 
 //////////////////// Implementation Details Follow ////////////////////////
 
-
-// Any single-vertex loop is interpreted as being either the empty loop or the
-// full loop, depending on whether the vertex is in the northern or southern
-// hemisphere respectively.
-inline S2Point S2Loop::kEmptyVertex() { return S2Point(0, 0, 1); }
-inline S2Point S2Loop::kFullVertex() { return S2Point(0, 0, -1); }
-
-inline std::vector<S2Point> S2Loop::kEmpty() {
-  return std::vector<S2Point>(1, kEmptyVertex());
+inline absl::Span<const S2Point> S2Loop::kEmpty() {
+  return absl::MakeConstSpan(&kEmptyVertex, 1);
 }
 
-inline std::vector<S2Point> S2Loop::kFull() {
-  return std::vector<S2Point>(1, kFullVertex());
+inline absl::Span<const S2Point> S2Loop::kFull() {
+  return absl::MakeConstSpan(&kFullVertex, 1);
 }
 
 inline bool S2Loop::is_empty() const {

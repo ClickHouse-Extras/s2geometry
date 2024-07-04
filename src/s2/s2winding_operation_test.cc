@@ -25,6 +25,12 @@
 
 #include <gtest/gtest.h>
 #include "absl/flags/flag.h"
+#include "absl/log/absl_check.h"
+#include "absl/log/absl_log.h"
+#include "absl/log/log_streamer.h"
+#include "absl/random/bit_gen_ref.h"
+#include "absl/random/random.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "s2/mutable_s2shape_index.h"
 #include "s2/s1angle.h"
@@ -35,11 +41,13 @@
 #include "s2/s2builderutil_snap_functions.h"
 #include "s2/s2cap.h"
 #include "s2/s2error.h"
+#include "s2/s2fractal.h"
 #include "s2/s2lax_polygon_shape.h"
 #include "s2/s2loop.h"
 #include "s2/s2memory_tracker.h"
 #include "s2/s2point.h"
 #include "s2/s2point_span.h"
+#include "s2/s2random.h"
 #include "s2/s2shape.h"
 #include "s2/s2testing.h"
 #include "s2/s2text_format.h"
@@ -73,13 +81,13 @@ void ExpectWindingResult(const S2WindingOperation::Options& options,
   MutableS2ShapeIndex actual;
   S2WindingOperation winding_op(
       make_unique<s2builderutil::IndexedLaxPolygonLayer>(&actual), options);
-  for (const string& loop_str : loop_strs) {
+  for (string_view loop_str : loop_strs) {
     winding_op.AddLoop(s2textformat::ParsePointsOrDie(loop_str));
   }
   S2Error error;
   ASSERT_TRUE(winding_op.Build(s2textformat::MakePointOrDie(ref_point_str),
                                ref_winding, rule, &error)) << error;
-  S2_LOG(INFO) << "Actual: " << s2textformat::ToString(actual);
+  ABSL_LOG(INFO) << "Actual: " << s2textformat::ToString(actual);
   S2LaxPolygonShape difference;
   S2BooleanOperation diff_op(
       S2BooleanOperation::OpType::SYMMETRIC_DIFFERENCE,

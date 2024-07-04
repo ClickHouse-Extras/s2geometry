@@ -4,6 +4,7 @@
 // open source releases of s2.
 
 %{
+#include <memory>
 #include <sstream>
 #include <string>
 
@@ -121,7 +122,7 @@ public:
     SWIG_exception(SWIG_ValueError, $1->text().c_str());
 }
 
-// This overload shadows the one the takes vector<uint64>&, and it
+// This overload shadows the one the takes vector<uint64_t>&, and it
 // does not work anyway.
 %ignore S2CellUnion::Init(std::vector<S2CellId> const& cell_ids);
 
@@ -291,7 +292,7 @@ class S2Point {
                              std::vector<S2Polyline*>* out) const {
     std::vector<std::unique_ptr<S2Polyline>> polylines =
         $self->IntersectWithPolyline(*in);
-    S2_DCHECK(out->empty());
+    ABSL_DCHECK(out->empty());
     out->reserve(polylines.size());
     for (auto& polyline : polylines) {
       out->push_back(polyline.release());
@@ -457,7 +458,8 @@ public:
 
 %copyctor S1ChordAngle;
 
-// Raise ValueError for any functions that would trigger a S2_CHECK/S2_DCHECK.
+// Raise ValueError for any functions that would trigger a
+// ABSL_CHECK/ABSL_DCHECK.
 %pythonprepend S2CellId::child %{
   if not self.is_valid():
     raise ValueError("S2CellId must be valid.")
@@ -635,7 +637,7 @@ public:
 %unignore S2CellId::End;
 %unignore S2CellId::FromDebugString(absl::string_view);
 %unignore S2CellId::FromFaceIJ(int, int, int);
-%unignore S2CellId::FromFacePosLevel(int, uint64, int);
+%unignore S2CellId::FromFacePosLevel(int, uint64_t, int);
 %unignore S2CellId::FromLatLng;
 %unignore S2CellId::FromPoint;
 %unignore S2CellId::FromToken(absl::string_view);
@@ -667,7 +669,7 @@ public:
 %unignore S2CellId::range_min;
 %unignore S2CellUnion;
 %ignore S2CellUnion::operator[];  // Silence the SWIG warning.
-%unignore S2CellUnion::S2CellUnion;
+%unignore S2CellUnion::S2CellUnion(const std::vector<uint64_t> &);
 %unignore S2CellUnion::~S2CellUnion;
 %unignore S2CellUnion::ApproxArea;
 %unignore S2CellUnion::Clone;
@@ -680,7 +682,7 @@ public:
 %unignore S2CellUnion::GetCapBound() const;
 %unignore S2CellUnion::GetDifference;
 %unignore S2CellUnion::GetRectBound;
-%unignore S2CellUnion::Init(std::vector<uint64> const &);
+%unignore S2CellUnion::Init(std::vector<uint64_t> const &);
 %unignore S2CellUnion::Intersection;
 %unignore S2CellUnion::Intersects;
 %unignore S2CellUnion::IsNormalized() const;
@@ -810,6 +812,10 @@ public:
 %unignore S2Loop::vertex;
 %unignore S2Polygon;
 %unignore S2Polygon::S2Polygon;
+%ignore S2Polygon::S2Polygon(std::unique_ptr<S2Loop>, S2Debug);
+%ignore S2Polygon::S2Polygon(std::unique_ptr<S2Loop>);
+%ignore S2Polygon::S2Polygon(std::vector<std::unique_ptr<S2Loop>>, S2Debug);
+%ignore S2Polygon::S2Polygon(std::vector<std::unique_ptr<S2Loop>>);
 %unignore S2Polygon::~S2Polygon;
 %unignore S2Polygon::BoundaryNear;
 %unignore S2Polygon::Clone;
@@ -826,10 +832,11 @@ public:
 %unignore S2Polygon::GetOverlapFractions(const S2Polygon&, const S2Polygon&);
 %unignore S2Polygon::GetRectBound;
 %unignore S2Polygon::Init;
+%ignore S2Polygon::Init(std::unique_ptr<S2Loop>);
 %unignore S2Polygon::InitNested;
+%ignore S2Polygon::InitNested(std::vector<std::unique_ptr<S2Loop>>);
 %unignore S2Polygon::InitToUnion;
 %unignore S2Polygon::Intersects;
-%unignore S2Polygon::IntersectWithPolyline;
 %unignore S2Polygon::IsValid;
 %unignore S2Polygon::MayIntersect(const S2Cell&) const;
 %unignore S2Polygon::Project;

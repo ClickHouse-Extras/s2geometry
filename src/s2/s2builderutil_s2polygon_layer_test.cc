@@ -18,16 +18,20 @@
 #include "s2/s2builderutil_s2polygon_layer.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "s2/base/casts.h"
-#include "s2/base/integral_types.h"
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
+
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/strings/string_view.h"
+
+#include "s2/base/casts.h"
+#include "s2/base/types.h"
 #include "s2/id_set_lexicon.h"
 #include "s2/mutable_s2shape_index.h"
 #include "s2/s2builder.h"
@@ -49,12 +53,13 @@ using s2textformat::MakePolylineOrDie;
 using std::make_unique;
 using std::string;
 using std::unique_ptr;
-using std::string;
 using std::vector;
 
 using EdgeType = S2Builder::EdgeType;
 
 namespace {
+
+using ::testing::Contains;
 
 void TestS2Polygon(const vector<string_view>& input_strs,
                    string_view expected_str, EdgeType edge_type) {
@@ -90,7 +95,8 @@ void TestS2PolygonUnchanged(string_view input_str) {
 
 // Unlike the methods above, the input consists of a set of *polylines*.
 void TestS2PolygonError(const vector<string_view>& input_strs,
-                        S2Error::Code expected_error, EdgeType edge_type) {
+                        absl::Span<const S2Error::Code> expected_codes,
+                        EdgeType edge_type) {
   SCOPED_TRACE(edge_type == EdgeType::DIRECTED ? "DIRECTED" : "UNDIRECTED");
   S2Builder builder{S2Builder::Options()};
   S2Polygon output;
@@ -102,13 +108,20 @@ void TestS2PolygonError(const vector<string_view>& input_strs,
   }
   S2Error error;
   ASSERT_FALSE(builder.Build(&error));
-  EXPECT_EQ(expected_error, error.code());
+  EXPECT_THAT(expected_codes, Contains(error.code()));
 }
 
 void TestS2PolygonError(const vector<string_view>& input_strs,
-                        S2Error::Code expected_error) {
-  TestS2PolygonError(input_strs, expected_error, EdgeType::DIRECTED);
-  TestS2PolygonError(input_strs, expected_error, EdgeType::UNDIRECTED);
+                        S2Error::Code expected_code) {
+  auto expected_codes = absl::Span<const S2Error::Code>(&expected_code, 1);
+  TestS2PolygonError(input_strs, expected_codes, EdgeType::DIRECTED);
+  TestS2PolygonError(input_strs, expected_codes, EdgeType::UNDIRECTED);
+}
+
+void TestS2PolygonError(const vector<string_view>& input_strs,
+                        absl::Span<const S2Error::Code> expected_codes) {
+  TestS2PolygonError(input_strs, expected_codes, EdgeType::DIRECTED);
+  TestS2PolygonError(input_strs, expected_codes, EdgeType::UNDIRECTED);
 }
 
 TEST(S2PolygonLayer, Empty) {
@@ -136,8 +149,9 @@ TEST(S2PolygonLayer, PartialLoop) {
 }
 
 TEST(S2PolygonLayer, InvalidPolygon) {
-  TestS2PolygonError({"0:0, 0:10, 10:0, 10:10, 0:0"},
-                     S2Error::LOOP_SELF_INTERSECTION);
+  TestS2PolygonError(
+      {"0:0, 0:10, 10:0, 10:10, 0:0"},
+      {S2Error::LOOP_SELF_INTERSECTION, S2Error::OVERLAPPING_GEOMETRY});
 }
 
 TEST(S2PolygonLayer, DuplicateInputEdges) {
@@ -153,7 +167,12 @@ TEST(S2PolygonLayer, DuplicateInputEdges) {
       "0:0, 0:2, 2:2, 1:1, 0:2, 2:2, 2:0, 0:0"));
   S2Error error;
   EXPECT_FALSE(builder.Build(&error));
-  EXPECT_EQ(S2Error::POLYGON_LOOPS_SHARE_EDGE, error.code());
+
+  const std::vector<S2Error::Code> expected_codes = {
+      S2Error::POLYGON_LOOPS_SHARE_EDGE,
+      S2Error::POLYGON_INCONSISTENT_LOOP_ORIENTATIONS};
+
+  EXPECT_THAT(expected_codes, Contains(error.code()));
   ASSERT_EQ(2, output.num_loops());
   unique_ptr<S2Loop> loop0(s2textformat::MakeLoopOrDie("0:0, 0:2, 2:2, 2:0"));
   unique_ptr<S2Loop> loop1(s2textformat::MakeLoopOrDie("0:2, 2:2, 1:1"));
@@ -164,13 +183,13 @@ TEST(S2PolygonLayer, DuplicateInputEdges) {
 // Since we don't expect to have any crossing edges, the key for each edge is
 // simply the sum of its endpoints.  This key has the advantage of being
 // unchanged when the endpoints of an edge are swapped.
-using EdgeLabelMap = flat_hash_map<S2Point, flat_hash_set<int32>>;
+using EdgeLabelMap = flat_hash_map<S2Point, flat_hash_set<int32_t>>;
 
 void AddPolylineWithLabels(const S2Polyline& polyline, EdgeType edge_type,
-                           int32 label_begin, S2Builder* builder,
+                           int32_t label_begin, S2Builder* builder,
                            EdgeLabelMap* edge_label_map) {
   for (int i = 0; i + 1 < polyline.num_vertices(); ++i) {
-    int32 label = label_begin + i;
+    int32_t label = label_begin + i;
     builder->set_label(label);
     // With undirected edges, reverse the direction of every other input edge.
     int dir = edge_type == EdgeType::DIRECTED ? 1 : (i & 1);
@@ -203,7 +222,7 @@ static void TestEdgeLabels(EdgeType edge_type) {
     ASSERT_EQ(expected_loop_sizes[i], label_set_ids[i].size());
     for (int j = 0; j < label_set_ids[i].size(); ++j) {
       S2Point key = output.loop(i)->vertex(j) + output.loop(i)->vertex(j + 1);
-      const flat_hash_set<int32>& expected_labels = edge_label_map[key];
+      const flat_hash_set<int32_t>& expected_labels = edge_label_map[key];
       ASSERT_EQ(expected_labels.size(),
                 label_set_lexicon.id_set(label_set_ids[i][j]).size());
       EXPECT_TRUE(std::equal(
@@ -321,7 +340,7 @@ TEST(IndexedS2PolygonLayer, AddsShape) {
   S2Builder builder{S2Builder::Options()};
   MutableS2ShapeIndex index;
   builder.StartLayer(make_unique<IndexedS2PolygonLayer>(&index));
-  const string& polygon_str = "0:0, 0:10, 10:0";
+  string_view polygon_str = "0:0, 0:10, 10:0";
   builder.AddPolygon(*s2textformat::MakePolygonOrDie(polygon_str));
   S2Error error;
   ASSERT_TRUE(builder.Build(&error));

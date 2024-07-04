@@ -100,9 +100,10 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+// NOLINTNEXTLINE(misc-include-cleaner) Used only by S2_TAN_PROJECTION.
+#include <cstdint>
 
-#include "s2/base/integral_types.h"
-#include "s2/base/logging.h"
+#include "absl/log/absl_check.h"
 #include "s2/r2.h"
 #include "s2/s2coords_internal.h"
 #include "s2/s2point.h"
@@ -307,7 +308,7 @@ inline double STtoUV(double s) {
   // the nearest double-precision result.
 
   s = std::tan(M_PI_2 * s - M_PI_4);
-  return s + (1.0 / (int64{1} << 53)) * s;
+  return s + (1.0 / (int64_t{1} << 53)) * s;
 }
 
 inline double UVtoST(double u) {
@@ -334,7 +335,7 @@ inline double UVtoST(double u) {
 #endif
 
 inline double IJtoSTMin(int i) {
-  S2_DCHECK(i >= 0 && i <= kLimitIJ);
+  ABSL_DCHECK(i >= 0 && i <= kLimitIJ);
   return (1.0 / kLimitIJ) * i;
 }
 
@@ -344,12 +345,12 @@ inline int STtoIJ(double s) {
 }
 
 inline double SiTitoST(unsigned int si) {
-  S2_DCHECK_LE(si, kMaxSiTi);
+  ABSL_DCHECK_LE(si, kMaxSiTi);
   return (1.0 / kMaxSiTi) * si;
 }
 
 inline unsigned int STtoSiTi(double s) {
-  // kMaxSiTi == 2^31, so the result doesn't fit in an int32 when s == 1.
+  // kMaxSiTi == 2^31, so the result doesn't fit in an int32_t when s == 1.
   return static_cast<unsigned int>(MathUtil::FastInt64Round(s * kMaxSiTi));
 }
 
@@ -370,7 +371,7 @@ inline S2Point FaceUVtoXYZ(int face, const R2Point& uv) {
 
 inline void ValidFaceXYZtoUV(int face, const S2Point& p,
                              double* pu, double* pv) {
-  S2_DCHECK_GT(p.DotProd(GetNorm(face)), 0);
+  ABSL_DCHECK_GT(p.DotProd(GetNorm(face)), 0);
   switch (face) {
     case 0:  *pu =  p[1] / p[0]; *pv =  p[2] / p[0]; break;
     case 1:  *pu = -p[0] / p[1]; *pv =  p[2] / p[1]; break;
@@ -456,9 +457,9 @@ inline S2Point GetUVWAxis(int face, int axis) {
 }
 
 inline int GetUVWFace(int face, int axis, int direction) {
-  S2_DCHECK(face >= 0 && face <= 5);
-  S2_DCHECK(axis >= 0 && axis <= 2);
-  S2_DCHECK(direction >= 0 && direction <= 1);
+  ABSL_DCHECK(face >= 0 && face <= 5);
+  ABSL_DCHECK(axis >= 0 && axis <= 2);
+  ABSL_DCHECK(direction >= 0 && direction <= 1);
   return internal::kFaceUVWFaces[face][axis][direction];
 }
 

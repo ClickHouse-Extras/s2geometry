@@ -20,21 +20,13 @@
 
 #include <cstddef>
 
+#include <cstdint>
 #include <functional>
 #include <limits>
 #include <utility>
 #include <vector>
 
-#include "s2/base/integral_types.h"
 #include "s2/util/gtl/dense_hash_set.h"
-
-class S2Point;
-namespace absl {
-namespace hash_internal {
-template <typename T>
-struct Hash;
-}  // namespace hash_internal
-}  // namespace absl
 
 // ValueLexicon is a class that maps distinct values to sequentially numbered
 // integer identifiers.  It automatically eliminates duplicates and uses a
@@ -42,7 +34,7 @@ struct Hash;
 //
 // Each distinct value is mapped to a 32-bit integer.  The space used for each
 // value is approximately 7 bytes plus the space needed for the value itself.
-// For example, int64 values would need approximately 15 bytes each.  Note
+// For example, int64_t values would need approximately 15 bytes each.  Note
 // also that values are referred to using 32-bit ids rather than 64-bit
 // pointers.
 //
@@ -52,7 +44,7 @@ struct Hash;
 // Example usage:
 //
 //   ValueLexicon<string> lexicon;
-//   uint32 cat_id = lexicon.Add("cat");
+//   uint32_t cat_id = lexicon.Add("cat");
 //   EXPECT_EQ(cat_id, lexicon.Add("cat"));
 //   EXPECT_EQ("cat", lexicon.value(cat_id));
 //
@@ -75,24 +67,25 @@ class ValueLexicon {
 
   // Add the given value to the lexicon if it is not already present, and
   // return its integer id.  Ids are assigned sequentially starting from zero.
-  uint32 Add(const T& value);
+  uint32_t Add(const T& value);
 
   // Return the number of values in the lexicon.
-  uint32 size() const;
+  uint32_t size() const;
 
   // Return the value with the given id.
-  const T& value(uint32 id) const;
+  const T& value(uint32_t id) const;
 
  private:
   friend class IdKeyEqual;
   // Choose kEmptyKey to be the last key that will ever be generated.
-  static const uint32 kEmptyKey = std::numeric_limits<uint32>::max();
+  static const uint32_t kEmptyKey = std::numeric_limits<uint32_t>::max();
 
   class IdHasher {
    public:
     IdHasher(const Hasher& hasher, const ValueLexicon* lexicon);
     const Hasher& hasher() const;
-    size_t operator()(uint32 id) const;
+    size_t operator()(uint32_t id) const;
+
    private:
     Hasher hasher_;
     const ValueLexicon* lexicon_;
@@ -101,13 +94,14 @@ class ValueLexicon {
   class IdKeyEqual {
    public:
     IdKeyEqual(const KeyEqual& key_equal, const ValueLexicon* lexicon);
-    bool operator()(uint32 id1, uint32 id2) const;
+    bool operator()(uint32_t id1, uint32_t id2) const;
+
    private:
     KeyEqual key_equal_;
     const ValueLexicon* lexicon_;
   };
 
-  using IdSet = gtl::dense_hash_set<uint32, IdHasher, IdKeyEqual>;
+  using IdSet = gtl::dense_hash_set<uint32_t, IdHasher, IdKeyEqual>;
 
   KeyEqual key_equal_;
   std::vector<T> values_;
@@ -117,9 +111,8 @@ class ValueLexicon {
 
 //////////////////   Implementation details follow   ////////////////////
 
-
 template <class T, class Hasher, class KeyEqual>
-const uint32 ValueLexicon<T, Hasher, KeyEqual>::kEmptyKey;
+const uint32_t ValueLexicon<T, Hasher, KeyEqual>::kEmptyKey;
 
 template <class T, class Hasher, class KeyEqual>
 ValueLexicon<T, Hasher, KeyEqual>::IdHasher::IdHasher(
@@ -134,7 +127,7 @@ const Hasher& ValueLexicon<T, Hasher, KeyEqual>::IdHasher::hasher() const {
 
 template <class T, class Hasher, class KeyEqual>
 inline size_t ValueLexicon<T, Hasher, KeyEqual>::IdHasher::operator()(
-    uint32 id) const {
+    uint32_t id) const {
   return hasher_(lexicon_->value(id));
 }
 
@@ -146,7 +139,7 @@ ValueLexicon<T, Hasher, KeyEqual>::IdKeyEqual::IdKeyEqual(
 
 template <class T, class Hasher, class KeyEqual>
 inline bool ValueLexicon<T, Hasher, KeyEqual>::IdKeyEqual::operator()(
-    uint32 id1, uint32 id2) const {
+    uint32_t id1, uint32_t id2) const {
   if (id1 == id2) return true;
   if (id1 == lexicon_->kEmptyKey || id2 == lexicon_->kEmptyKey) {
     return false;
@@ -218,7 +211,7 @@ void ValueLexicon<T, Hasher, KeyEqual>::Clear() {
 }
 
 template <class T, class Hasher, class KeyEqual>
-uint32 ValueLexicon<T, Hasher, KeyEqual>::Add(const T& value) {
+uint32_t ValueLexicon<T, Hasher, KeyEqual>::Add(const T& value) {
   if (!values_.empty() && key_equal_(value, values_.back())) {
     return values_.size() - 1;
   }
@@ -233,12 +226,12 @@ uint32 ValueLexicon<T, Hasher, KeyEqual>::Add(const T& value) {
 }
 
 template <class T, class Hasher, class KeyEqual>
-inline uint32 ValueLexicon<T, Hasher, KeyEqual>::size() const {
+inline uint32_t ValueLexicon<T, Hasher, KeyEqual>::size() const {
   return values_.size();
 }
 
 template <class T, class Hasher, class KeyEqual>
-inline const T& ValueLexicon<T, Hasher, KeyEqual>::value(uint32 id) const {
+inline const T& ValueLexicon<T, Hasher, KeyEqual>::value(uint32_t id) const {
   return values_[id];
 }
 

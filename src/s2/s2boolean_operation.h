@@ -18,11 +18,12 @@
 #ifndef S2_S2BOOLEAN_OPERATION_H_
 #define S2_S2BOOLEAN_OPERATION_H_
 
+#include <cstdint>
 #include <memory>
 #include <utility>
 #include <vector>
 
-#include "s2/base/integral_types.h"
+#include "absl/log/absl_log.h"
 #include "s2/s2builder.h"
 #include "s2/s2builder_graph.h"
 #include "s2/s2builder_layer.h"
@@ -179,24 +180,6 @@
 // with a polygon boundary.  However also note that S2BooleanOperation is
 // perfectly happy to accept such geometry as input.
 //
-// Note the following differences between S2BooleanOperation and the similar
-// S2MultiBooleanOperation class:
-//
-//  - S2BooleanOperation operates on exactly two regions at a time, whereas
-//    S2MultiBooleanOperation operates on any number of regions.
-//
-//  - S2BooleanOperation is potentially much faster when the input is already
-//    represented as S2ShapeIndexes.  The algorithm is output sensitive and is
-//    often sublinear in the input size.  This can be a big advantage if, say,
-//
-//  - S2BooleanOperation supports exact predicates and the corresponding
-//    exact operations (i.e., operations that are equivalent to computing the
-//    exact result and then snap rounding it).
-//
-//  - S2MultiBooleanOperation has better error guarantees when there are many
-//    regions, since it requires only one snapping operation for any number of
-//    input regions.
-//
 // Example usage:
 //   S2ShapeIndex a, b;  // Input geometry, e.g. containing polygons.
 //   S2Polygon polygon;  // Output geometry.
@@ -207,7 +190,7 @@
 //                         options);
 //   S2Error error;
 //   if (!op.Build(a, b, &error)) {
-//     S2_LOG(ERROR) << error;
+//     ABSL_LOG(ERROR) << error;
 //     ...
 //   }
 //
@@ -226,7 +209,7 @@
 class S2BooleanOperation {
  public:
   // The supported operation types.
-  enum class OpType : uint8 {
+  enum class OpType : uint8_t {
     UNION,                // Contained by either region.
     INTERSECTION,         // Contained by both regions.
     DIFFERENCE,           // Contained by the first region but not the second.
@@ -237,14 +220,14 @@ class S2BooleanOperation {
 
   // Defines whether polygons are considered to contain their vertices and/or
   // edges (see definitions above).
-  enum class PolygonModel : uint8 { OPEN, SEMI_OPEN, CLOSED };
+  enum class PolygonModel : uint8_t { OPEN, SEMI_OPEN, CLOSED };
 
   // Translates PolygonModel to one of the strings above.
   static absl::string_view PolygonModelToString(PolygonModel model);
 
   // Defines whether polylines are considered to contain their endpoints
   // (see definitions above).
-  enum class PolylineModel : uint8 { OPEN, SEMI_OPEN, CLOSED };
+  enum class PolylineModel : uint8_t { OPEN, SEMI_OPEN, CLOSED };
 
   // Translates PolylineModel to one of the strings above.
   static absl::string_view PolylineModelToString(PolylineModel model);
@@ -270,7 +253,7 @@ class S2BooleanOperation {
   // Conceptually, the difference between these two options is that with
   // Precision::SNAPPED, the inputs are snap rounded (together), whereas with
   // Precision::EXACT only the result is snap rounded.
-  enum class Precision : uint8 { EXACT, SNAPPED };
+  enum class Precision : uint8_t { EXACT, SNAPPED };
 
   // SourceId identifies an edge from one of the two input S2ShapeIndexes.
   // It consists of a region id (0 or 1), a shape id within that region's
@@ -278,19 +261,21 @@ class S2BooleanOperation {
   class SourceId {
    public:
     SourceId();
-    SourceId(int region_id, int32 shape_id, int32 edge_id);
-    explicit SourceId(int32 special_edge_id);
+    SourceId(int region_id, int32_t shape_id, int32_t edge_id);
+    explicit SourceId(int32_t special_edge_id);
     int region_id() const { return region_id_; }
-    int32 shape_id() const { return shape_id_; }
-    int32 edge_id() const { return edge_id_; }
+    int32_t shape_id() const { return shape_id_; }
+    int32_t edge_id() const { return edge_id_; }
     // TODO(ericv): Convert to functions, define all 6 comparisons.
     bool operator==(SourceId other) const;
     bool operator<(SourceId other) const;
 
    private:
-    uint32 region_id_ : 1;
-    uint32 shape_id_ : 31;
-    int32 edge_id_;
+    // TODO(user): Use in-class initializers when C++20 is allowed in
+    // opensource.
+    uint32_t region_id_ : 1;
+    uint32_t shape_id_ : 31;
+    int32_t edge_id_;
   };
 
   class Options {
@@ -368,6 +353,7 @@ class S2BooleanOperation {
     //
     // DEFAULT: Precision::EXACT
     Precision precision() const;
+    // TODO(b/78590369): Precision.SNAPPED is not yet implemented.
     // void set_precision(Precision precision);
 
     // If true, the input geometry is interpreted as representing nearby
@@ -399,6 +385,7 @@ class S2BooleanOperation {
     //
     // DEFAULT: false
     bool conservative_output() const;
+    // TODO(b/315152896): Implement support for conservative output.
     // void set_conservative_output(bool conservative);
 
     // If specified, then each output edge will be labelled with one or more
@@ -411,7 +398,7 @@ class S2BooleanOperation {
     // "label_set_lexicon" and an "label_set_id" for each edge.  You can then
     // look up the source information for each edge like this:
     //
-    // for (int32 label : label_set_lexicon.id_set(label_set_id)) {
+    // for (int32_t label : label_set_lexicon.id_set(label_set_id)) {
     //   const SourceId& src = source_id_lexicon.value(label);
     //   // region_id() specifies which S2ShapeIndex the edge is from (0 or 1).
     //   DoSomething(src.region_id(), src.shape_id(), src.edge_id());
@@ -419,6 +406,7 @@ class S2BooleanOperation {
     //
     // DEFAULT: nullptr
     ValueLexicon<SourceId>* source_id_lexicon() const;
+    // TODO(b/314819022): Implement support for source_id_lexicon.
     // void set_source_id_lexicon(ValueLexicon<SourceId>* source_id_lexicon);
 
     // Specifies that internal memory usage should be tracked using the given
@@ -434,7 +422,7 @@ class S2BooleanOperation {
     //   S2Error error;
     //   if (!op.Build(..., &error)) {
     //     if (error.code() == S2Error::RESOURCE_EXHAUSTED) {
-    //       S2_LOG(ERROR) << error;  // Memory limit exceeded
+    //       ABSL_LOG(ERROR) << error;  // Memory limit exceeded
     //     }
     //   }
     //
@@ -557,7 +545,7 @@ class S2BooleanOperation {
   std::vector<std::unique_ptr<S2Builder::Layer>> layers_;
 
   // The following field is set if and only if there are no output layers.
-  bool* result_empty_;
+  bool* result_empty_ = nullptr;
 };
 
 
@@ -568,10 +556,9 @@ inline S2BooleanOperation::SourceId::SourceId()
     : region_id_(0), shape_id_(0), edge_id_(-1) {
 }
 
-inline S2BooleanOperation::SourceId::SourceId(
-    int region_id, int32 shape_id, int32 edge_id)
-    : region_id_(region_id), shape_id_(shape_id), edge_id_(edge_id) {
-}
+inline S2BooleanOperation::SourceId::SourceId(int region_id, int32_t shape_id,
+                                              int32_t edge_id)
+    : region_id_(region_id), shape_id_(shape_id), edge_id_(edge_id) {}
 
 inline S2BooleanOperation::SourceId::SourceId(int special_edge_id)
     : region_id_(0), shape_id_(0), edge_id_(special_edge_id) {

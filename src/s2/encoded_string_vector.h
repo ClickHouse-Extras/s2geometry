@@ -20,11 +20,11 @@
 
 #include <cstddef>
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "s2/base/integral_types.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "s2/util/coding/coder.h"
@@ -49,7 +49,7 @@ class StringVectorEncoder {
   StringVectorEncoder();
 
   // Adds a string to the encoded vector.
-  void Add(const std::string& str);
+  void Add(absl::string_view str);
 
   // Adds a string to the encoded vector by means of the given Encoder.  The
   // string consists of all output added to the encoder before the next call
@@ -73,7 +73,7 @@ class StringVectorEncoder {
   // A vector consisting of the starting offset of each string in the
   // encoder's data buffer, plus a final entry pointing just past the end of
   // the last string.
-  std::vector<uint64> offsets_;
+  std::vector<uint64_t> offsets_;
   Encoder data_;
 };
 
@@ -105,32 +105,32 @@ class EncodedStringVector {
   size_t size() const;
 
   // Returns the string at the given index.
-  absl::string_view operator[](int i) const;
+  absl::string_view operator[](size_t i) const;
 
   // Returns a Decoder initialized with the string at the given index.
-  Decoder GetDecoder(int i) const;
+  Decoder GetDecoder(size_t i) const;
 
   // Returns a pointer to the start of the string at the given index.  This is
   // faster than operator[] but returns an unbounded string.
-  const char* GetStart(int i) const;
+  const char* GetStart(size_t i) const;
 
   // Returns the entire vector of original strings.  Requires that the
   // data buffer passed to the constructor persists until the result vector is
   // no longer needed.
   std::vector<absl::string_view> Decode() const;
 
+  // Copies the encoded byte stream to a new encoder.
   void Encode(Encoder* encoder) const;
 
  private:
-  EncodedUintVector<uint64> offsets_;
+  EncodedUintVector<uint64_t> offsets_;
   const char* data_;
 };
 
 
 //////////////////   Implementation details follow   ////////////////////
 
-
-inline void StringVectorEncoder::Add(const std::string& str) {
+inline void StringVectorEncoder::Add(absl::string_view str) {
   offsets_.push_back(data_.length());
   data_.Ensure(str.size());
   data_.putn(str.data(), str.size());
@@ -150,20 +150,25 @@ inline size_t EncodedStringVector::size() const {
   return offsets_.size();
 }
 
-inline absl::string_view EncodedStringVector::operator[](int i) const {
-  uint64 start = (i == 0) ? 0 : offsets_[i - 1];
-  uint64 limit = offsets_[i];
+inline absl::string_view EncodedStringVector::operator[](size_t i) const {
+  uint64_t start = (i == 0) ? 0 : offsets_[i - 1];
+  uint64_t limit = offsets_[i];
   return absl::string_view(data_ + start, limit - start);
 }
 
-inline Decoder EncodedStringVector::GetDecoder(int i) const {
-  uint64 start = (i == 0) ? 0 : offsets_[i - 1];
-  uint64 limit = offsets_[i];
+inline Decoder EncodedStringVector::GetDecoder(size_t i) const {
+  // Return an empty decoder if we don't have enough data.
+  if (i >= offsets_.size()) {
+    return Decoder();
+  }
+
+  uint64_t start = (i == 0) ? 0 : offsets_[i - 1];
+  uint64_t limit = offsets_[i];
   return Decoder(data_ + start, limit - start);
 }
 
-inline const char* EncodedStringVector::GetStart(int i) const {
-  uint64 start = (i == 0) ? 0 : offsets_[i - 1];
+inline const char* EncodedStringVector::GetStart(size_t i) const {
+  uint64_t start = (i == 0) ? 0 : offsets_[i - 1];
   return data_ + start;
 }
 

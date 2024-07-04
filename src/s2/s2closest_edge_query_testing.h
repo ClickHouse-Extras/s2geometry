@@ -23,6 +23,9 @@
 #include <utility>
 #include <vector>
 
+#include "absl/log/absl_check.h"
+#include "absl/random/bit_gen_ref.h"
+#include "absl/random/random.h"
 #include "s2/mutable_s2shape_index.h"
 #include "s2/s1angle.h"
 #include "s2/s2cap.h"
@@ -30,10 +33,12 @@
 #include "s2/s2cell_id.h"
 #include "s2/s2edge_distances.h"
 #include "s2/s2edge_vector_shape.h"
+#include "s2/s2fractal.h"
 #include "s2/s2loop.h"
 #include "s2/s2metrics.h"
 #include "s2/s2point.h"
 #include "s2/s2point_vector_shape.h"
+#include "s2/s2random.h"
 #include "s2/s2shape.h"
 #include "s2/s2shapeutil_count_edges.h"
 #include "s2/s2shapeutil_shape_edge_id.h"
@@ -59,6 +64,11 @@ class ShapeIndexFactory {
 // immediately adjacent to the loop.
 class RegularLoopShapeIndexFactory : public ShapeIndexFactory {
  public:
+  RegularLoopShapeIndexFactory() = default;
+  // We present the same interface as the other factories, even though we
+  // do not use the BitGenRef here.
+  explicit RegularLoopShapeIndexFactory(absl::BitGenRef unused_bitgen) {}
+
   void AddEdges(const S2Cap& index_cap, int num_edges,
                 MutableS2ShapeIndex* index) const override {
     index->Add(std::make_unique<S2Loop::OwningShape>(S2Loop::MakeRegularLoop(
@@ -69,27 +79,40 @@ class RegularLoopShapeIndexFactory : public ShapeIndexFactory {
 // Generates a fractal loop that approximately fills the given S2Cap.
 class FractalLoopShapeIndexFactory : public ShapeIndexFactory {
  public:
+  explicit FractalLoopShapeIndexFactory(absl::BitGenRef bitgen)
+      : bitgen_(bitgen) {}
+
   void AddEdges(const S2Cap& index_cap, int num_edges,
                 MutableS2ShapeIndex* index) const override {
-    S2Testing::Fractal fractal;
+    S2Fractal fractal(bitgen_);
     fractal.SetLevelForApproxMaxEdges(num_edges);
     index->Add(std::make_unique<S2Loop::OwningShape>(
-        fractal.MakeLoop(S2Testing::GetRandomFrameAt(index_cap.center()),
+        fractal.MakeLoop(s2random::FrameAt(bitgen_, index_cap.center()),
                          index_cap.GetRadius())));
   }
+
+ private:
+  absl::BitGenRef bitgen_;
 };
 
 // Generates a cloud of points that approximately fills the given S2Cap.
 class PointCloudShapeIndexFactory : public ShapeIndexFactory {
  public:
+  explicit PointCloudShapeIndexFactory(absl::BitGenRef bitgen)
+      : bitgen_(bitgen) {}
+
   void AddEdges(const S2Cap& index_cap, int num_edges,
                 MutableS2ShapeIndex* index) const override {
     std::vector<S2Point> points;
+    points.reserve(num_edges);
     for (int i = 0; i < num_edges; ++i) {
-      points.push_back(S2Testing::SamplePoint(index_cap));
+      points.push_back(s2random::SamplePoint(bitgen_, index_cap));
     }
     index->Add(std::make_unique<S2PointVectorShape>(std::move(points)));
   }
+
+ private:
+  absl::BitGenRef bitgen_;
 };
 
 }  // namespace s2testing

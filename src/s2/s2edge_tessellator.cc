@@ -20,6 +20,8 @@
 #include <algorithm>
 #include <vector>
 
+#include "absl/log/absl_check.h"
+#include "absl/log/absl_log.h"
 #include "s2/r2.h"
 #include "s2/s1angle.h"
 #include "s2/s1chord_angle.h"
@@ -187,8 +189,8 @@ S1Angle S2EdgeTessellator::kMinTolerance() {
 
 S2EdgeTessellator::S2EdgeTessellator(const S2::Projection* projection,
                                      S1Angle tolerance)
-    : proj_(*projection) {
-  if (tolerance < kMinTolerance()) S2_LOG(ERROR) << "Tolerance too small";
+    : proj_(projection) {
+  if (tolerance < kMinTolerance()) ABSL_LOG(ERROR) << "Tolerance too small";
 
   // Rather than scaling the error estimate as described above, instead we scale
   // the tolerance.  See algorithm description at the top of this file.
@@ -209,21 +211,21 @@ S1ChordAngle S2EdgeTessellator::EstimateMaxError(
   constexpr double t2 = 1 - kInterpolationFraction;
   S2Point mid1 = S2::Interpolate(a, b, t1);
   S2Point mid2 = S2::Interpolate(a, b, t2);
-  S2Point pmid1 = proj_.Unproject(proj_.Interpolate(t1, pa, pb));
-  S2Point pmid2 = proj_.Unproject(proj_.Interpolate(t2, pa, pb));
+  S2Point pmid1 = proj_->Unproject(proj_->Interpolate(t1, pa, pb));
+  S2Point pmid2 = proj_->Unproject(proj_->Interpolate(t2, pa, pb));
   return std::max(S1ChordAngle(mid1, pmid1), S1ChordAngle(mid2, pmid2));
 }
 
 void S2EdgeTessellator::AppendProjected(
     const S2Point& a, const S2Point& b, vector<R2Point>* vertices) const {
-  R2Point pa = proj_.Project(a);
+  R2Point pa = proj_->Project(a);
   if (vertices->empty()) {
     vertices->push_back(pa);
   } else {
-    pa = proj_.WrapDestination(vertices->back(), pa);
-    S2_DCHECK_EQ(vertices->back(), pa) << "Appended edges must form a chain";
+    pa = proj_->WrapDestination(vertices->back(), pa);
+    ABSL_DCHECK_EQ(vertices->back(), pa) << "Appended edges must form a chain";
   }
-  R2Point pb = proj_.Project(b);
+  R2Point pb = proj_->Project(b);
   AppendProjected(pa, a, pb, b, vertices);
 }
 
@@ -235,12 +237,12 @@ void S2EdgeTessellator::AppendProjected(
 void S2EdgeTessellator::AppendProjected(const R2Point& pa, const S2Point& a,
                                         const R2Point& pb_in, const S2Point& b,
                                         vector<R2Point>* vertices) const {
-  R2Point pb = proj_.WrapDestination(pa, pb_in);
+  R2Point pb = proj_->WrapDestination(pa, pb_in);
   if (EstimateMaxError(pa, a, pb, b) <= scaled_tolerance_) {
     vertices->push_back(pb);
   } else {
     S2Point mid = (a + b).Normalize();
-    R2Point pmid = proj_.WrapDestination(pa, proj_.Project(mid));
+    R2Point pmid = proj_->WrapDestination(pa, proj_->Project(mid));
     AppendProjected(pa, a, pmid, mid, vertices);
     AppendProjected(pmid, mid, pb, b, vertices);
   }
@@ -248,8 +250,8 @@ void S2EdgeTessellator::AppendProjected(const R2Point& pa, const S2Point& a,
 
 void S2EdgeTessellator::AppendUnprojected(
     const R2Point& pa, const R2Point& pb, vector<S2Point>* vertices) const {
-  S2Point a = proj_.Unproject(pa);
-  S2Point b = proj_.Unproject(pb);
+  S2Point a = proj_->Unproject(pa);
+  S2Point b = proj_->Unproject(pb);
   if (vertices->empty()) {
     vertices->push_back(a);
   } else {
@@ -258,7 +260,7 @@ void S2EdgeTessellator::AppendUnprojected(
     // transformed into "0:-175, 0:-181" while the second is transformed into
     // "0:179, 0:183".  The two coordinate pairs for the middle vertex
     // ("0:-181" and "0:179") may not yield exactly the same S2Point.
-    S2_DCHECK(S2::ApproxEquals(vertices->back(), a))
+    ABSL_DCHECK(S2::ApproxEquals(vertices->back(), a))
         << "Appended edges must form a chain";
   }
   AppendUnprojected(pa, a, pb, b, vertices);
@@ -270,12 +272,12 @@ void S2EdgeTessellator::AppendUnprojected(
     const R2Point& pa, const S2Point& a,
     const R2Point& pb_in, const S2Point& b, vector<S2Point>* vertices) const {
   // See notes above regarding measuring the interpolation error.
-  R2Point pb = proj_.WrapDestination(pa, pb_in);
+  R2Point pb = proj_->WrapDestination(pa, pb_in);
   if (EstimateMaxError(pa, a, pb, b) <= scaled_tolerance_) {
     vertices->push_back(b);
   } else {
-    R2Point pmid = proj_.Interpolate(0.5, pa, pb);
-    S2Point mid = proj_.Unproject(pmid);
+    R2Point pmid = proj_->Interpolate(0.5, pa, pb);
+    S2Point mid = proj_->Unproject(pmid);
     AppendUnprojected(pa, a, pmid, mid, vertices);
     AppendUnprojected(pmid, mid, pb, b, vertices);
   }

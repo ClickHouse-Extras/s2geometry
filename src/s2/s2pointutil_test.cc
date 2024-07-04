@@ -22,6 +22,9 @@
 #include <string>
 
 #include <gtest/gtest.h>
+#include "absl/log/absl_log.h"
+#include "absl/log/log_streamer.h"
+#include "absl/random/random.h"
 #include "s2/s1angle.h"
 #include "s2/s2cell.h"
 #include "s2/s2cell_id.h"
@@ -31,6 +34,7 @@
 #include "s2/s2measures.h"
 #include "s2/s2point.h"
 #include "s2/s2predicates.h"
+#include "s2/s2random.h"
 #include "s2/s2testing.h"
 #include "s2/util/math/matrix3x3.h"
 
@@ -80,18 +84,21 @@ static void TestRotate(const S2Point& p, const S2Point& axis, S1Angle angle) {
 }
 
 TEST(S2, Rotate) {
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "ROTATE",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
   for (int iter = 0; iter < 1000; ++iter) {
-    S2Point axis = S2Testing::RandomPoint();
-    S2Point target = S2Testing::RandomPoint();
+    S2Point axis = s2random::Point(bitgen);
+    S2Point target = s2random::Point(bitgen);
     // Choose a distance whose logarithm is uniformly distributed.
-    double distance = M_PI * pow(1e-15, S2Testing::rnd.RandDouble());
+    double distance = M_PI * s2random::LogUniform(bitgen, 1e-15, 1.0);
     // Sometimes choose points near the far side of the axis.
-    if (S2Testing::rnd.OneIn(5)) distance = M_PI - distance;
+    if (absl::Bernoulli(bitgen, 0.2)) distance = M_PI - distance;
     S2Point p = S2::GetPointOnLine(axis, target, S1Angle::Radians(distance));
     // Choose the rotation angle.
-    double angle = 2 * M_PI * pow(1e-15, S2Testing::rnd.RandDouble());
-    if (S2Testing::rnd.OneIn(3)) angle = -angle;
-    if (S2Testing::rnd.OneIn(10)) angle = 0;
+    double angle = 2 * M_PI * s2random::LogUniform(bitgen, 1e-15, 1.0);
+    if (absl::Bernoulli(bitgen, 1.0 / 3)) angle = -angle;
+    if (absl::Bernoulli(bitgen, 0.1)) angle = 0;
     TestRotate(p, axis, S1Angle::Radians(angle));
   }
 }
@@ -144,8 +151,8 @@ TEST(S2, OriginTest) {
   // S2Earth because we don't want to depend on that package.)
   double distance_km = acos(S2::Origin().z()) * S2Testing::kEarthRadiusKm;
   EXPECT_GE(distance_km, 50.0);
-  S2_LOG(INFO) << "\nS2::Origin() coordinates: " << S2LatLng(S2::Origin())
-            << ", distance from pole: " << distance_km << " km";
+  ABSL_LOG(INFO) << "\nS2::Origin() coordinates: " << S2LatLng(S2::Origin())
+                 << ", distance from pole: " << distance_km << " km";
 
   // Check that S2::Origin() is not collinear with the edges of any large
   // S2Cell.  We do this is two parts.  For S2Cells that belong to either

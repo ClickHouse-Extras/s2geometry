@@ -20,9 +20,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -30,19 +33,24 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "absl/algorithm/container.h"
 #include "absl/container/fixed_array.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/flags/flag.h"
-#include "absl/flags/reflection.h"
+#include "absl/log/absl_check.h"
+#include "absl/log/absl_log.h"
+#include "absl/log/log_streamer.h"
+#include "absl/random/bit_gen_ref.h"
+#include "absl/random/random.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "absl/types/span.h"
 
 #include "s2/base/casts.h"
 #include "s2/base/commandlineflags.h"
 #include "s2/base/commandlineflags_declare.h"
-#include "s2/base/integral_types.h"
 #include "s2/base/log_severity.h"
-#include "s2/base/logging.h"
+#include "s2/base/types.h"
 #include "s2/mutable_s2shape_index.h"
 #include "s2/r1interval.h"
 #include "s2/r2rect.h"
@@ -63,6 +71,7 @@
 #include "s2/s2edge_crossings.h"
 #include "s2/s2edge_distances.h"
 #include "s2/s2error.h"
+#include "s2/s2fractal.h"
 #include "s2/s2latlng.h"
 #include "s2/s2latlng_rect.h"
 #include "s2/s2loop.h"
@@ -71,12 +80,12 @@
 #include "s2/s2point.h"
 #include "s2/s2pointutil.h"
 #include "s2/s2polyline.h"
+#include "s2/s2random.h"
 #include "s2/s2region_coverer.h"
 #include "s2/s2shape.h"
 #include "s2/s2testing.h"
 #include "s2/s2text_format.h"
 #include "s2/util/coding/coder.h"
-#include "s2/util/gtl/legacy_random_shuffle.h"
 #include "s2/util/math/matrix3x3.h"
 
 using absl::flat_hash_set;
@@ -92,6 +101,8 @@ using std::string;
 using std::swap;
 using std::unique_ptr;
 using std::vector;
+
+using ::testing::Contains;
 
 // A set of nested loops around the point 0:0 (lat:lng).
 // Every vertex of kNear0 is a vertex of kNear1.
@@ -224,7 +235,7 @@ static bool TestEncodeDecode(const S2Polygon& src) {
   src.Encode(&encoder);
   Decoder decoder(encoder.base(), encoder.length());
   S2Polygon dst;
-  S2_CHECK(dst.Decode(&decoder));
+  ABSL_CHECK(dst.Decode(&decoder));
   return src.Equals(dst);
 }
 
@@ -390,6 +401,12 @@ static void CheckComplementary(const S2Polygon& a, const S2Polygon& b) {
   CheckEqual(a, b1);
 }
 
+// Returns the `z`-sigma confidence bound for `num_trials` binomial trials
+// with success probability `p`.  Uses Gaussian approximation.
+static double ConfidenceBound(double p, int num_trials, double z) {
+  return p * num_trials + z * std::sqrt(p * (1 - p) * num_trials);
+}
+
 TEST(S2Polygon, TestApproxContainsAndDisjoint) {
   // We repeatedly choose a random cell id and intersect its bounding polygon
   // "A" with the bounding polygon "B" of one its child cells.  The result may
@@ -400,11 +417,16 @@ TEST(S2Polygon, TestApproxContainsAndDisjoint) {
   //
   // We repeat the test many times and expect that some fraction of the exact
   // tests should fail, while all of the approximate test should succeed.
-  const int kIters = 1000;
+  //
+  // This test is fragile to the random sequence, but flakiness should be
+  // negligible.  See analysis at bottom of function.
+  constexpr int kIters = 10'000;
   int exact_contains = 0, exact_disjoint = 0;
-  S2Testing::rnd.Reset(absl::GetFlag(FLAGS_s2_random_seed));
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "APPROX_CONTAINS_AND_DISJOINT",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
   for (int iter = 0; iter < kIters; ++iter) {
-    S2CellId id = S2Testing::GetRandomCellId(10);
+    S2CellId id = s2random::CellId(bitgen, 10);
     S2Polygon parent_polygon((S2Cell(id)));
     S2Polygon child_polygon(S2Cell(id.child(0)));
 
@@ -451,8 +473,14 @@ TEST(S2Polygon, TestApproxContainsAndDisjoint) {
   // child cell (depending on how far the shared vertex is outside the parent
   // cell).  This means that we expect 1 - 0.5 * 0.5 * (0.25 ~ 0.5) = 87.5% to
   // 93.75% of the exact disjoint tests to succeed on average.
-  EXPECT_LT(exact_contains, 0.40 * kIters);  // about 37.5% succeed
-  EXPECT_LT(exact_disjoint, 0.96 * kIters);  // 87.5% - 93.75% succeed
+  // With 3 sigma here, each test should fail 0.3% of the time, or 0.6% total.
+  // This is within the bounds of acceptable test flakiness.
+  // About 37.5% succeed.
+  EXPECT_GT(exact_contains, ConfidenceBound(0.375, kIters, /*z=*/-3.0));
+  EXPECT_LT(exact_contains, ConfidenceBound(0.375, kIters, /*z=*/3.0));
+  // 87.5% - 93.75% succeed.
+  EXPECT_GT(exact_disjoint, ConfidenceBound(0.8750, kIters, /*z=*/-3.0));
+  EXPECT_LT(exact_disjoint, ConfidenceBound(0.9375, kIters, /*z=*/3.0));
 }
 
 // Given a pair of polygons where A contains B, check that various identities
@@ -741,33 +769,35 @@ TEST_F(S2PolygonTestBase, EmptyAndFull) {
 TEST_F(S2PolygonTestBase, PointersCorrectAfterMove) {
   S2Polygon p0;
   p0.Copy(*near_10_);
-  S2_CHECK(p0.IsValid());
+  ABSL_CHECK(p0.IsValid());
 
-  EXPECT_EQ(down_cast<S2Polygon::Shape*>(p0.index().shape(0))->polygon(), &p0);
+  EXPECT_EQ(down_cast<const S2Polygon::Shape*>(p0.index().shape(0))->polygon(),
+            &p0);
 
   S2Polygon p1 = std::move(p0);
-  EXPECT_EQ(down_cast<S2Polygon::Shape*>(p1.index().shape(0))->polygon(), &p1);
+  EXPECT_EQ(down_cast<const S2Polygon::Shape*>(p1.index().shape(0))->polygon(),
+            &p1);
 }
 
 TEST_F(S2PolygonTestBase, ValidAfterMove) {
   {
     S2Polygon polygon;
     polygon.Copy(*near_10_);
-    S2_CHECK(polygon.IsValid());
+    ABSL_CHECK(polygon.IsValid());
 
     S2Polygon moved(std::move(polygon));
-    S2_CHECK(!moved.is_empty());
+    ABSL_CHECK(!moved.is_empty());
     EXPECT_TRUE(moved.IsValid());
   }
 
   {
     S2Polygon polygon;
     polygon.Copy(*near_10_);
-    S2_CHECK(polygon.IsValid());
+    ABSL_CHECK(polygon.IsValid());
 
     S2Polygon moved;
     moved = std::move(polygon);
-    S2_CHECK(!moved.is_empty());
+    ABSL_CHECK(!moved.is_empty());
     EXPECT_TRUE(moved.IsValid());
   }
 
@@ -1332,12 +1362,12 @@ TEST(S2Polygon, Bug8) {
   };
   S2Polygon a(MakeLoops(a_vertices));
   S2Polygon b(MakeLoops(b_vertices));
-  S2_VLOG(1) << "\nS2Polygon: " << s2textformat::ToString(a);
-  S2_VLOG(1) << "\nS2Polygon: " << s2textformat::ToString(b);
+  ABSL_VLOG(1) << "\nS2Polygon: " << s2textformat::ToString(a);
+  ABSL_VLOG(1) << "\nS2Polygon: " << s2textformat::ToString(b);
   S2Polygon c;
   c.InitToUnion(a, b);
   //  Loop 1: Edge 1 crosses edge 3
-  S2_VLOG(1) << "\nS2Polygon: " << s2textformat::ToString(c);
+  ABSL_VLOG(1) << "\nS2Polygon: " << s2textformat::ToString(c);
 }
 
 TEST(S2Polygon, Bug9) {
@@ -1481,12 +1511,12 @@ TEST(S2Polygon, Bug10) {
   };
   S2Polygon a(MakeLoops(a_vertices));
   S2Polygon b(MakeLoops(b_vertices));
-  S2_VLOG(1) << "\nS2Polygon: " << s2textformat::ToString(a);
-  S2_VLOG(1) << "\nS2Polygon: " << s2textformat::ToString(b);
+  ABSL_VLOG(1) << "\nS2Polygon: " << s2textformat::ToString(a);
+  ABSL_VLOG(1) << "\nS2Polygon: " << s2textformat::ToString(b);
   S2Polygon c;
   c.InitToUnion(a, b);
   // Inconsistent loop orientations detected
-  S2_VLOG(1) << "\nS2Polygon: " << s2textformat::ToString(c);
+  ABSL_VLOG(1) << "\nS2Polygon: " << s2textformat::ToString(c);
 }
 
 TEST(S2Polygon, Bug11) {
@@ -1715,14 +1745,14 @@ static void CheckCoveringIsConservative(const S2Polygon& polygon,
 
 // Remove a random polygon from "pieces" and return it.
 static unique_ptr<S2Polygon> ChoosePiece(
-    vector<unique_ptr<S2Polygon>> *pieces) {
-  int i = S2Testing::rnd.Uniform(pieces->size());
+    absl::BitGenRef bitgen, vector<unique_ptr<S2Polygon>>* pieces) {
+  int i = absl::Uniform<int>(bitgen, 0, pieces->size());
   unique_ptr<S2Polygon> result = std::move((*pieces)[i]);
   pieces->erase(pieces->begin() + i);
   return result;
 }
 
-static void SplitAndAssemble(const S2Polygon& polygon) {
+static void SplitAndAssemble(absl::BitGenRef bitgen, const S2Polygon& polygon) {
   // Normalize the polygon's loop structure by rebuilding it with S2Builder.
   S2Builder builder{S2Builder::Options()};
   S2Polygon expected;
@@ -1732,7 +1762,7 @@ static void SplitAndAssemble(const S2Polygon& polygon) {
   S2Error error;
   ASSERT_TRUE(builder.Build(&error)) << error;
 
-  for (int iter = 0; iter < (google::DEBUG_MODE ? 3 : 10); ++iter) {
+  for (int iter = 0; iter < (S2_DEBUG_MODE ? 3 : 10); ++iter) {
     S2RegionCoverer coverer;
     // Compute the minimum level such that the polygon's bounding
     // cap is guaranteed to be cut.
@@ -1740,7 +1770,7 @@ static void SplitAndAssemble(const S2Polygon& polygon) {
     int min_level = S2::kMaxWidth.GetLevelForMaxValue(diameter);
 
     // Now choose a level that has up to 500 cells in the covering.
-    int level = min_level + S2Testing::rnd.Uniform(google::DEBUG_MODE ? 4 : 6);
+    int level = min_level + absl::Uniform(bitgen, 0, S2_DEBUG_MODE ? 4 : 6);
     coverer.mutable_options()->set_min_level(min_level);
     coverer.mutable_options()->set_max_level(level);
     coverer.mutable_options()->set_max_cells(500);
@@ -1751,7 +1781,7 @@ static void SplitAndAssemble(const S2Polygon& polygon) {
     covering.Init(cells);
     S2Testing::CheckCovering(polygon, covering, false);
     CheckCoveringIsConservative(polygon, cells);
-    S2_VLOG(2) << cells.size() << " cells in covering";
+    ABSL_VLOG(2) << cells.size() << " cells in covering";
     vector<unique_ptr<S2Polygon>> pieces;
     int i = 0;
     for (S2CellId cell_id : cells) {
@@ -1759,9 +1789,9 @@ static void SplitAndAssemble(const S2Polygon& polygon) {
       S2Polygon window(cell);
       auto piece = make_unique<S2Polygon>();
       piece->InitToIntersection(polygon, window);
-      S2_VLOG(4) << "\nPiece " << i++ << ":\n  Window: "
-              << s2textformat::ToString(window)
-              << "\n  Piece: " << s2textformat::ToString(*piece);
+      ABSL_VLOG(4) << "\nPiece " << i++
+                   << ":\n  Window: " << s2textformat::ToString(window)
+                   << "\n  Piece: " << s2textformat::ToString(*piece);
       pieces.push_back(std::move(piece));
     }
 
@@ -1774,13 +1804,13 @@ static void SplitAndAssemble(const S2Polygon& polygon) {
     // because this always joins a single original piece to the current union
     // rather than doing the unions according to a random tree structure.
     while (pieces.size() > 1) {
-      unique_ptr<S2Polygon> a(ChoosePiece(&pieces));
-      unique_ptr<S2Polygon> b(ChoosePiece(&pieces));
+      unique_ptr<S2Polygon> a(ChoosePiece(bitgen, &pieces));
+      unique_ptr<S2Polygon> b(ChoosePiece(bitgen, &pieces));
       auto c = make_unique<S2Polygon>();
       c->InitToUnion(*a, *b);
-      S2_VLOG(4) << "\nJoining piece a: " << s2textformat::ToString(*a)
-              << "\n  With piece b: " << s2textformat::ToString(*b)
-              << "\n  To get piece c: " << s2textformat::ToString(*c);
+      ABSL_VLOG(4) << "\nJoining piece a: " << s2textformat::ToString(*a)
+                   << "\n  With piece b: " << s2textformat::ToString(*b)
+                   << "\n  To get piece c: " << s2textformat::ToString(*c);
       pieces.push_back(std::move(c));
     }
     unique_ptr<S2Polygon> result(std::move(pieces[0]));
@@ -1806,17 +1836,20 @@ TEST_F(S2PolygonTestBase, Splitting) {
   // It takes too long to test all the polygons in debug mode, so we just pick
   // out some of the more interesting ones.
 
-  SplitAndAssemble(*near_10_);
-  SplitAndAssemble(*near_H3210_);
-  SplitAndAssemble(*far_H3210_);
-  SplitAndAssemble(*south_0ab_);
-  SplitAndAssemble(*south_210b_);
-  SplitAndAssemble(*south_H20abc_);
-  SplitAndAssemble(*nf1_n10_f2_s10abc_);
-  SplitAndAssemble(*nf2_n2_f210_s210ab_);
-  SplitAndAssemble(*far_H_);
-  SplitAndAssemble(*south_H_);
-  SplitAndAssemble(*far_H_south_H_);
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "SPLITTING",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
+  SplitAndAssemble(bitgen, *near_10_);
+  SplitAndAssemble(bitgen, *near_H3210_);
+  SplitAndAssemble(bitgen, *far_H3210_);
+  SplitAndAssemble(bitgen, *south_0ab_);
+  SplitAndAssemble(bitgen, *south_210b_);
+  SplitAndAssemble(bitgen, *south_H20abc_);
+  SplitAndAssemble(bitgen, *nf1_n10_f2_s10abc_);
+  SplitAndAssemble(bitgen, *nf2_n2_f210_s210ab_);
+  SplitAndAssemble(bitgen, *far_H_);
+  SplitAndAssemble(bitgen, *south_H_);
+  SplitAndAssemble(bitgen, *far_H_south_H_);
 }
 
 TEST(S2Polygon, InitToCellUnionBorder) {
@@ -1824,19 +1857,24 @@ TEST(S2Polygon, InitToCellUnionBorder) {
   // The main thing to check is that adjacent cells of different sizes get
   // merged correctly.  To do this we generate two random adjacent cells,
   // convert to polygon, and make sure the polygon only has a single loop.
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "INIT_TO_CELL_UNION_BORDER",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
   for (int iter = 0; iter < 200; ++iter) {
     SCOPED_TRACE(StrCat("Iteration ", iter));
 
     // Choose a random non-leaf cell.
     S2CellId big_cell =
-        S2Testing::GetRandomCellId(S2Testing::rnd.Uniform(S2CellId::kMaxLevel));
+        s2random::CellId(bitgen, absl::Uniform(bitgen, 0, S2CellId::kMaxLevel));
     // Get all neighbors at some smaller level.
-    int small_level = big_cell.level() +
-        S2Testing::rnd.Uniform(min(16, S2CellId::kMaxLevel - big_cell.level()));
+    int small_level =
+        absl::Uniform(bitgen, big_cell.level(),
+                      min(big_cell.level() + 16, S2CellId::kMaxLevel));
     vector<S2CellId> neighbors;
     big_cell.AppendAllNeighbors(small_level, &neighbors);
     // Pick one at random.
-    S2CellId small_cell = neighbors[S2Testing::rnd.Uniform(neighbors.size())];
+    S2CellId small_cell =
+        neighbors[absl::Uniform<int>(bitgen, 0, neighbors.size())];
     // If it's diagonally adjacent, bail out.
     S2CellId edge_neighbors[4];
     big_cell.GetEdgeNeighbors(edge_neighbors);
@@ -1846,10 +1884,10 @@ TEST(S2Polygon, InitToCellUnionBorder) {
         diagonal = false;
       }
     }
-    S2_VLOG(3) << iter << ": big_cell " << big_cell <<
-        " small_cell " << small_cell;
+    ABSL_VLOG(3) << iter << ": big_cell " << big_cell << " small_cell "
+                 << small_cell;
     if (diagonal) {
-      S2_VLOG(3) << "  diagonal - bailing out!";
+      ABSL_VLOG(3) << "  diagonal - bailing out!";
       continue;
     }
 
@@ -1935,12 +1973,12 @@ TEST(S2Polygon, InitToSnappedIsValid_A) {
       "53.1328020478452:6.39444903453293, 53.1328019:6.394449, "
       "53.1327091:6.3961766, 53.1313753:6.3958652, 53.1312825:6.3975924, "
       "53.132616:6.3979042, 53.1326161348736:6.39790423150577"));
-  S2_LOG(INFO) << "\nInput: " << s2textformat::ToString(*poly);
+  ABSL_LOG(INFO) << "\nInput: " << s2textformat::ToString(*poly);
   EXPECT_TRUE(poly->IsValid());
   S2Polygon poly_snapped;
   poly_snapped.set_s2debug_override(S2Debug::DISABLE);
   poly_snapped.InitToSnapped(*poly);
-  S2_LOG(INFO) << "\nSnapped: " << s2textformat::ToString(poly_snapped);
+  ABSL_LOG(INFO) << "\nSnapped: " << s2textformat::ToString(poly_snapped);
   S2Error error;
   EXPECT_FALSE(poly_snapped.FindValidationError(&error)) << error;
 }
@@ -1960,12 +1998,12 @@ TEST(S2Polygon, InitToSnappedIsValid_B) {
       "51.6615946694783:4.99923124520759, 51.6616389353165:4.99819106536521, "
       "51.6616852:4.9971, 51.6617538:4.995487, "
       "51.661753964726:4.99548702962593"));
-  S2_LOG(INFO) << "\nInput: " << s2textformat::ToString(*poly);
+  ABSL_LOG(INFO) << "\nInput: " << s2textformat::ToString(*poly);
   EXPECT_TRUE(poly->IsValid());
   S2Polygon poly_snapped;
   poly_snapped.set_s2debug_override(S2Debug::DISABLE);
   poly_snapped.InitToSnapped(*poly);
-  S2_LOG(INFO) << "\nSnapped: " << s2textformat::ToString(poly_snapped);
+  ABSL_LOG(INFO) << "\nSnapped: " << s2textformat::ToString(poly_snapped);
   S2Error error;
   EXPECT_FALSE(poly_snapped.FindValidationError(&error)) << error;
 }
@@ -1979,12 +2017,12 @@ TEST(S2Polygon, InitToSnappedIsValid_C) {
       "53.5925176:19.6317308, 53.5928526:19.6297652, 53.6015949:19.6362943, "
       "53.6015950436033:19.6362944072725, 53.6015950814439:19.6362941852262, "
       "53.5616342380536:19.6064737764314"));
-  S2_LOG(INFO) << "\nInput: " << s2textformat::ToString(*poly);
+  ABSL_LOG(INFO) << "\nInput: " << s2textformat::ToString(*poly);
   EXPECT_TRUE(poly->IsValid());
   S2Polygon poly_snapped;
   poly_snapped.set_s2debug_override(S2Debug::DISABLE);
   poly_snapped.InitToSnapped(*poly);
-  S2_LOG(INFO) << "\nSnapped: " << s2textformat::ToString(poly_snapped);
+  ABSL_LOG(INFO) << "\nSnapped: " << s2textformat::ToString(poly_snapped);
   S2Error error;
   EXPECT_FALSE(poly_snapped.FindValidationError(&error)) << error;
 }
@@ -1994,14 +2032,70 @@ TEST(S2Polygon, InitToSnappedIsValid_D) {
       "52.0909316:4.8673826, 52.0909317627574:4.86738262858533, "
       "52.0911338452911:4.86248482549567, 52.0911337:4.8624848, "
       "52.0910665:4.8641176, 52.090999:4.8657502"));
-  S2_LOG(INFO) << "\nInput: " << s2textformat::ToString(*poly);
+  ABSL_LOG(INFO) << "\nInput: " << s2textformat::ToString(*poly);
   EXPECT_TRUE(poly->IsValid());
   S2Polygon poly_snapped;
   poly_snapped.set_s2debug_override(S2Debug::DISABLE);
   poly_snapped.InitToSnapped(*poly);
-  S2_LOG(INFO) << "\nSnapped: " << s2textformat::ToString(poly_snapped);
+  ABSL_LOG(INFO) << "\nSnapped: " << s2textformat::ToString(poly_snapped);
   S2Error error;
   EXPECT_FALSE(poly_snapped.FindValidationError(&error)) << error;
+}
+
+TEST(S2Polygon, DuplicateEdgesAreInvalid) {
+  vector<unique_ptr<S2Loop>> loops;
+  loops.emplace_back(make_unique<S2Loop>(vector<S2Point>{
+      {1.0, 0.0, 0.0},
+      {0.0, 1.0, 0.0},
+      {0.0, 0.0, 1.0},
+  }));
+
+  loops.emplace_back(make_unique<S2Loop>(vector<S2Point>{
+      {0.0, 0.0, 1.0},
+      {0.0, 1.0, 0.0},
+      {1.0, 0.0, 0.0},
+  }));
+
+  S2Polygon polygon(std::move(loops), S2Debug::DISABLE);
+  EXPECT_FALSE(polygon.IsValid());
+
+  // Make sure that the polygon is still invalid even after encoding/decoding.
+  Encoder encoder;
+  polygon.Encode(&encoder);
+
+  S2Polygon decoded;
+  decoded.set_s2debug_override(S2Debug::DISABLE);
+
+  Decoder decoder(encoder.base(), encoder.length());
+  decoded.Decode(&decoder);
+  EXPECT_FALSE(decoded.IsValid());
+}
+
+TEST(S2Polygon, DefaultPolygonAndEmptyLoopBothValid) {
+  S2Polygon polygon0;
+  EXPECT_TRUE(polygon0.IsValid());
+  EXPECT_TRUE(polygon0.is_empty());
+
+  S2Polygon polygon1(std::make_unique<S2Loop>(S2Loop::kEmpty()));
+  EXPECT_TRUE(polygon1.IsValid());
+  EXPECT_TRUE(polygon1.is_empty());
+}
+
+TEST(S2Polygon, ShortNonEmptyChainRemoved) {
+  // A single vertex chain with any vertex that's != S2::Origin should be
+  // considered an empty loop and thus removed when constructing the polygon,
+  // leaving a valid, but empty polygon.
+  std::vector<S2Point> pnts = {S2LatLng::FromDegrees(1, 1).ToPoint()};
+  std::vector<std::unique_ptr<S2Loop>> loops;
+  loops.emplace_back(std::make_unique<S2Loop>(std::move(pnts)));
+
+  S2Polygon polygon;
+  polygon.set_s2debug_override(S2Debug::DISABLE);
+  polygon.InitNested(std::move(loops));
+
+  EXPECT_TRUE(polygon.IsValid());
+  EXPECT_EQ(polygon.num_loops(), 0);
+  EXPECT_TRUE(polygon.is_empty());
 }
 
 TEST(S2Polygon, MultipleInit) {
@@ -2191,6 +2285,9 @@ TEST_F(S2PolygonTestBase, GetDistance) {
       "3:1, 3:-1, -3:-1, -3:1; 4:2, 4:-2, -4:-2, -4:2;"));
 
   // All points on the boundary of the polygon should be at distance zero.
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "GET_DISTANCE",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
   for (int i = 0; i < nested->num_loops(); i++) {
     const S2Loop* loop = nested->loop(i);
     for (int j = 0; j < loop->num_vertices(); j++) {
@@ -2199,7 +2296,7 @@ TEST_F(S2PolygonTestBase, GetDistance) {
       // A point along an edge.
       TestDistanceMethods(*nested,
                           S2::Interpolate(loop->vertex(j), loop->vertex(j + 1),
-                                          S2Testing::rnd.RandDouble()),
+                                          absl::Uniform(bitgen, 0.0, 1.0)),
                           S2Point());
     }
   }
@@ -2249,8 +2346,6 @@ class IsValidTest : public testing::Test {
   IsValidTest() {
     init_oriented_ = false;
     modify_polygon_hook_ = nullptr;
-    rnd_ = &S2Testing::rnd;
-    rnd_->Reset(absl::GetFlag(FLAGS_s2_random_seed));
   }
 
   ~IsValidTest() override { Reset(); }
@@ -2266,10 +2361,11 @@ class IsValidTest : public testing::Test {
   // the common center point of all the loops.  The loop radii decrease
   // exponentially in order to prevent accidental loop crossings when one of
   // the loops is modified.
-  void AddConcentricLoops(int num_loops, int min_vertices) {
-    S2_DCHECK_LE(num_loops, 10);  // Because radii decrease exponentially.
-    S2Point center = S2Testing::RandomPoint();
-    int num_vertices = min_vertices + rnd_->Uniform(10);
+  void AddConcentricLoops(absl::BitGenRef bitgen, int num_loops,
+                          int min_vertices) {
+    ABSL_DCHECK_LE(num_loops, 10);  // Because radii decrease exponentially.
+    S2Point center = s2random::Point(bitgen);
+    int num_vertices = min_vertices + absl::Uniform(bitgen, 0, 10);
     for (int i = 0; i < num_loops; ++i) {
       S1Angle radius = S1Angle::Degrees(80 * pow(0.1, i));
       *AddLoop() = S2Testing::MakeRegularPoints(center, radius, num_vertices);
@@ -2280,16 +2376,13 @@ class IsValidTest : public testing::Test {
     vloops_.clear();
   }
 
-  void CheckInvalid(string_view snippet) {
+  // Creates and returns a new polygon with the current settings.
+  S2Polygon MakePolygon(absl::BitGenRef bitgen) {
     vector<unique_ptr<S2Loop>> loops;
     for (const auto& vloop : vloops_) {
       loops.push_back(make_unique<S2Loop>(*vloop, S2Debug::DISABLE));
     }
-    // Cannot replace with std::shuffle (b/65670707) since this uses an
-    // incompatible random source which is also used as a source of randomness
-    // in the surrounding code.
-    // NOLINTNEXTLINE
-    gtl::legacy_random_shuffle(loops.begin(), loops.end(), *rnd_);
+    absl::c_shuffle(loops, bitgen);
     S2Polygon polygon;
     polygon.set_s2debug_override(S2Debug::DISABLE);
     if (init_oriented_) {
@@ -2297,126 +2390,202 @@ class IsValidTest : public testing::Test {
     } else {
       polygon.InitNested(std::move(loops));
     }
-    if (modify_polygon_hook_) (*modify_polygon_hook_)(&polygon);
+    if (modify_polygon_hook_) (*modify_polygon_hook_)(bitgen, &polygon);
+
+    return polygon;
+  }
+
+  void CheckInvalid(absl::BitGenRef bitgen,
+                    absl::flat_hash_set<S2Error::Code> codes = {}) {
     S2Error error;
-    EXPECT_TRUE(polygon.FindValidationError(&error));
-    EXPECT_THAT(error.text(), testing::HasSubstr(snippet));
+    EXPECT_TRUE(MakePolygon(bitgen).FindValidationError(&error));
+    if (!codes.empty()) {
+      EXPECT_THAT(codes, Contains(error.code()));
+    }
     Reset();
+  }
+
+  void CheckInvalid(absl::BitGenRef bitgen, S2Error::Code code) {
+    CheckInvalid(bitgen, absl::flat_hash_set<S2Error::Code>{code});
+  }
+
+  void CheckInvalidOrEmpty(absl::BitGenRef bitgen) {
+    if (MakePolygon(bitgen).is_empty()) {
+      return;
+    }
+    CheckInvalid(bitgen);
   }
 
  protected:
   static constexpr int kIters = 100;
 
   bool init_oriented_;
-  void (*modify_polygon_hook_)(S2Polygon*);
-  S2Testing::Random* rnd_;
+  void (*modify_polygon_hook_)(absl::BitGenRef, S2Polygon*);
   vector<unique_ptr<vector<S2Point>>> vloops_;
 };
 
 TEST_F(IsValidTest, UnitLength) {
   // This test can only be run in optimized builds because there are
-  // S2_DCHECK(IsUnitLength()) calls scattered throughout the S2 code.
-  if (google::DEBUG_MODE) return;
+  // ABSL_DCHECK(IsUnitLength()) calls scattered throughout the S2 code.
+  // Note that this test also invokes UB in opt mode (and will fail with
+  // ubsan, etc).
+  // TODO(b/168294614): Fix this, maybe by checking for NaN in S2Loop::Init.
+  if (S2_DEBUG_MODE) return;
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "UNIT_LENGTH",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
   for (int iter = 0; iter < kIters; ++iter) {
-    AddConcentricLoops(1 + rnd_->Uniform(6), 3 /*min_vertices*/);
-    vector<S2Point>* vloop = vloops_[rnd_->Uniform(vloops_.size())].get();
-    S2Point* p = &(*vloop)[rnd_->Uniform(vloop->size())];
-    switch (rnd_->Uniform(3)) {
+    AddConcentricLoops(bitgen, absl::Uniform(bitgen, 1, 7), 3 /*min_vertices*/);
+    vector<S2Point>* vloop =
+        vloops_[absl::Uniform<size_t>(bitgen, 0, vloops_.size())].get();
+    S2Point* p = &(*vloop)[absl::Uniform<size_t>(bitgen, 0, vloop->size())];
+    switch (absl::Uniform(bitgen, 0, 3)) {
       case 0: *p = S2Point(0, 0, 0); break;
-      case 1: *p *= 1e-30 * pow(1e60, rnd_->RandDouble()); break;
+      case 1:
+        *p *= s2random::LogUniform(bitgen, 1e-30, 1e30);
+        break;
       case 2: *p = numeric_limits<double>::quiet_NaN() * S2Point(); break;
     }
-    CheckInvalid("unit length");
+    CheckInvalid(bitgen, {S2Error::NOT_UNIT_LENGTH, S2Error::INVALID_VERTEX,
+                          S2Error::POLYGON_INCONSISTENT_LOOP_ORIENTATIONS,
+                          S2Error::LOOP_NOT_ENOUGH_VERTICES});
   }
 }
 
 TEST_F(IsValidTest, VertexCount) {
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "VERTEX_COUNT",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
   for (int iter = 0; iter < kIters; ++iter) {
     vector<S2Point>* vloop = AddLoop();
-    if (rnd_->OneIn(2)) {
-      vloop->push_back(S2Testing::RandomPoint());
-      vloop->push_back(S2Testing::RandomPoint());
-    }
-    CheckInvalid("at least 3 vertices");
+    vloop->push_back(s2random::Point(bitgen));
+    vloop->push_back(s2random::Point(bitgen));
+    CheckInvalid(bitgen, S2Error::LOOP_NOT_ENOUGH_VERTICES);
   }
 }
 
 TEST_F(IsValidTest, DuplicateVertex) {
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "DUPLICATE_VERTEX",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
   for (int iter = 0; iter < kIters; ++iter) {
-    AddConcentricLoops(1, 3 /*min_vertices*/);
+    AddConcentricLoops(bitgen, 1, 3 /*min_vertices*/);
     vector<S2Point>* vloop = vloops_[0].get();
     int n = vloop->size();
-    int i = rnd_->Uniform(n);
-    int j = rnd_->Uniform(n - 1);
+    int i = absl::Uniform(bitgen, 0, n);
+    int j = absl::Uniform(bitgen, 0, n - 1);
     (*vloop)[i] = (*vloop)[j + (j >= i)];
-    CheckInvalid("duplicate vertex");
+    CheckInvalid(bitgen, {// Duplicate caused a degenerate edges.
+                          S2Error::DUPLICATE_VERTICES,
+                          // Duplicate caused the interior to flip.
+                          S2Error::POLYGON_INCONSISTENT_LOOP_ORIENTATIONS,
+                          // Duplicate caused a duplicate polygon edge.
+                          S2Error::OVERLAPPING_GEOMETRY});
   }
 }
 
 TEST_F(IsValidTest, SelfIntersection) {
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "SELF_INTERSECTION",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
   for (int iter = 0; iter < kIters; ++iter) {
     // Use multiple loops so that we can test both holes and shells.  We need
     // at least 5 vertices so that the modified edges don't intersect any
     // nested loops.
-    AddConcentricLoops(1 + rnd_->Uniform(6), 5 /*min_vertices*/);
-    vector<S2Point>* vloop = vloops_[rnd_->Uniform(vloops_.size())].get();
+    AddConcentricLoops(bitgen, absl::Uniform(bitgen, 1, 7), 5 /*min_vertices*/);
+    vector<S2Point>* vloop =
+        vloops_[absl::Uniform<size_t>(bitgen, 0, vloops_.size())].get();
     int n = vloop->size();
-    int i = rnd_->Uniform(n);
+    int i = absl::Uniform(bitgen, 0, n);
     swap((*vloop)[i], (*vloop)[(i+1) % n]);
-    CheckInvalid("crosses edge");
+    CheckInvalid(bitgen, {S2Error::LOOP_SELF_INTERSECTION,
+                          S2Error::POLYGON_INCONSISTENT_LOOP_ORIENTATIONS,
+                          S2Error::OVERLAPPING_GEOMETRY});
   }
 }
 
 TEST_F(IsValidTest, EmptyLoop) {
+  const absl::Span<const S2Point> kEmptyLoop = S2Loop::kEmpty();
+
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "EMPTY_LOOP",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
   for (int iter = 0; iter < kIters; ++iter) {
-    AddConcentricLoops(rnd_->Uniform(5), 3 /*min_vertices*/);
-    *AddLoop() = S2Loop::kEmpty();
-    CheckInvalid("empty loop");
+    Reset();
+    int loops = absl::Uniform(bitgen, 1, 6);
+    AddConcentricLoops(bitgen, loops, 3 /*min_vertices*/);
+
+    // Empty loops should be ignored, leaving only the non-empty loops.
+    int nloop = absl::Uniform(bitgen, 1, 6);
+    for (int j = 0; j < nloop; ++j) {
+      AddLoop()->assign(kEmptyLoop.begin(), kEmptyLoop.end());
+    }
+
+    S2Polygon polygon = MakePolygon(bitgen);
+    EXPECT_TRUE(polygon.IsValid());
+    EXPECT_EQ(polygon.num_loops(), loops);
   }
 }
 
 TEST_F(IsValidTest, FullLoop) {
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "FULL_LOOP",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
   for (int iter = 0; iter < kIters; ++iter) {
     // This is only an error if there is at least one other loop.
-    AddConcentricLoops(1 + rnd_->Uniform(5), 3 /*min_vertices*/);
-    *AddLoop() = S2Loop::kFull();
-    CheckInvalid("full loop");
+    AddConcentricLoops(bitgen, absl::Uniform(bitgen, 1, 6), 3 /*min_vertices*/);
+    const absl::Span<const S2Point> full_loop = S2Loop::kFull();
+    AddLoop()->assign(full_loop.begin(), full_loop.end());
+
+    // We can't distinguish full/empty loops through the S2Shape API (only
+    // whether the shape as a whole is the full or empty polygon).  So when we
+    // have an extra full loop, we'll see it as an empty loop via S2Shape.
+    CheckInvalid(bitgen, {S2Error::POLYGON_EXCESS_FULL_LOOP,
+                          S2Error::POLYGON_EMPTY_LOOP});
   }
 }
 
 TEST_F(IsValidTest, LoopsCrossing) {
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "LOOPS_CROSSING",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
   for (int iter = 0; iter < kIters; ++iter) {
-    AddConcentricLoops(2, 4 /*min_vertices*/);
+    AddConcentricLoops(bitgen, 2, 4 /*min_vertices*/);
     // Both loops have the same number of vertices, and vertices at the same
     // index position are collinear with the center point, so we can create a
     // crossing by simply exchanging two vertices at the same index position.
     int n = vloops_[0]->size();
-    int i = rnd_->Uniform(n);
+    int i = absl::Uniform(bitgen, 0, n);
     swap((*vloops_[0])[i], (*vloops_[1])[i]);
-    if (rnd_->OneIn(2)) {
+    if (absl::Bernoulli(bitgen, 0.5)) {
       // By copy the two adjacent vertices from one loop to the other, we can
       // ensure that the crossings happen at vertices rather than edges.
       (*vloops_[0])[(i+1) % n] = (*vloops_[1])[(i+1) % n];
       (*vloops_[0])[(i+n-1) % n] = (*vloops_[1])[(i+n-1) % n];
     }
-    CheckInvalid("crosses loop");
+    CheckInvalid(bitgen,
+                 {S2Error::OVERLAPPING_GEOMETRY, S2Error::POLYGON_LOOPS_CROSS,
+                  S2Error::POLYGON_INCONSISTENT_LOOP_ORIENTATIONS});
   }
 }
 
 TEST_F(IsValidTest, DuplicateEdge) {
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "DUPLICATE_EDGE",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
   for (int iter = 0; iter < kIters; ++iter) {
-    AddConcentricLoops(2, 4 /*min_vertices*/);
+    AddConcentricLoops(bitgen, 2, 4 /*min_vertices*/);
     int n = vloops_[0]->size();
-    if (rnd_->OneIn(2)) {
+    if (absl::Bernoulli(bitgen, 0.5)) {
       // Create a shared edge (same direction in both loops).
-      int i = rnd_->Uniform(n);
+      int i = absl::Uniform(bitgen, 0, n);
       (*vloops_[0])[i] = (*vloops_[1])[i];
       (*vloops_[0])[(i+1) % n] = (*vloops_[1])[(i+1) % n];
     } else {
       // Create a reversed edge (opposite direction in each loop) by cutting
       // loop 0 into two halves along one of its diagonals and replacing both
       // loops with the result.
-      int split = 2 + rnd_->Uniform(n - 3);
+      int split = absl::Uniform(bitgen, 2, n - 1);
       vloops_[1]->clear();
       vloops_[1]->push_back((*vloops_[0])[0]);
       for (int i = split; i < n; ++i) {
@@ -2424,21 +2593,27 @@ TEST_F(IsValidTest, DuplicateEdge) {
       }
       vloops_[0]->resize(split + 1);
     }
-    CheckInvalid("has duplicate");
+    CheckInvalid(bitgen,
+                 {S2Error::DUPLICATE_VERTICES, S2Error::OVERLAPPING_GEOMETRY,
+                  S2Error::POLYGON_LOOPS_SHARE_EDGE,
+                  S2Error::POLYGON_INCONSISTENT_LOOP_ORIENTATIONS});
   }
 }
 
 TEST_F(IsValidTest, InconsistentOrientations) {
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "INCONSISTENT_ORIENTATIONS",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
   for (int iter = 0; iter < kIters; ++iter) {
-    AddConcentricLoops(2 + rnd_->Uniform(5), 3 /*min_vertices*/);
+    AddConcentricLoops(bitgen, absl::Uniform(bitgen, 2, 7), 3 /*min_vertices*/);
     init_oriented_ = true;
-    CheckInvalid("Inconsistent loop orientations");
+    CheckInvalid(bitgen, S2Error::POLYGON_INCONSISTENT_LOOP_ORIENTATIONS);
   }
 }
 
-static void SetInvalidLoopDepth(S2Polygon* polygon) {
-  int i = S2Testing::rnd.Uniform(polygon->num_loops());
-  if (i == 0 || S2Testing::rnd.OneIn(3)) {
+static void SetInvalidLoopDepth(absl::BitGenRef bitgen, S2Polygon* polygon) {
+  int i = absl::Uniform<int>(bitgen, 0, polygon->num_loops());
+  if (i == 0 || absl::Bernoulli(bitgen, 1.0 / 3)) {
     polygon->loop(i)->set_depth(-1);
   } else {
     polygon->loop(i)->set_depth(polygon->loop(i-1)->depth() + 2);
@@ -2447,30 +2622,37 @@ static void SetInvalidLoopDepth(S2Polygon* polygon) {
 
 TEST_F(IsValidTest, LoopDepthNegative) {
   modify_polygon_hook_ = SetInvalidLoopDepth;
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "LOOP_DEPTH_NEGATIVE",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
   for (int iter = 0; iter < kIters; ++iter) {
-    AddConcentricLoops(1 + rnd_->Uniform(4), 3 /*min_vertices*/);
-    CheckInvalid("invalid loop depth");
+    AddConcentricLoops(bitgen, absl::Uniform(bitgen, 1, 5), 3 /*min_vertices*/);
+    CheckInvalid(bitgen, S2Error::POLYGON_INVALID_LOOP_DEPTH);
   }
 }
 
-static void SetInvalidLoopNesting(S2Polygon* polygon) {
-  int i = S2Testing::rnd.Uniform(polygon->num_loops());
+static void SetInvalidLoopNesting(absl::BitGenRef bitgen, S2Polygon* polygon) {
+  int i = absl::Uniform<int>(bitgen, 0, polygon->num_loops());
   polygon->loop(i)->Invert();
 }
 
 TEST_F(IsValidTest, LoopNestingInvalid) {
   modify_polygon_hook_ = SetInvalidLoopNesting;
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "LOOP_NESTING_INVALID",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
   for (int iter = 0; iter < kIters; ++iter) {
-    AddConcentricLoops(2 + rnd_->Uniform(4), 3 /*min_vertices*/);
+    AddConcentricLoops(bitgen, absl::Uniform(bitgen, 2, 6), 3 /*min_vertices*/);
     // Randomly invert all the loops in order to generate cases where the
     // outer loop encompasses almost the entire sphere.  This tests different
     // code paths because bounding box checks are not as useful.
-    if (rnd_->OneIn(2)) {
+    if (absl::Bernoulli(bitgen, 0.5)) {
       for (const auto& loop : vloops_) {
         std::reverse(loop->begin(), loop->end());
       }
     }
-    CheckInvalid("Invalid nesting");
+    CheckInvalid(bitgen, {S2Error::POLYGON_INVALID_LOOP_NESTING,
+                          S2Error::POLYGON_INCONSISTENT_LOOP_ORIENTATIONS});
   }
 }
 
@@ -2479,12 +2661,15 @@ TEST_F(IsValidTest, FuzzTest) {
   // when they receive arbitrary invalid input.  (We don't test large inputs;
   // it is assumed that the client enforces their own size limits before even
   // attempting to construct geometric objects.)
-  if (google::DEBUG_MODE)
+  if (S2_DEBUG_MODE)
     return;  // Requires unit length vertices.
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "FUZZ_TEST",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
   for (int iter = 0; iter < kIters; ++iter) {
-    int num_loops = 1 + rnd_->Uniform(10);
+    int num_loops = absl::Uniform(bitgen, 2, 12);
     for (int i = 0; i < num_loops; ++i) {
-      int num_vertices = rnd_->Uniform(10);
+      int num_vertices = absl::Uniform(bitgen, 0, 10);
       vector<S2Point>* vloop = AddLoop();
       while (vloop->size() < num_vertices) {
         // Since the number of vertices is random, we automatically test empty
@@ -2492,34 +2677,39 @@ TEST_F(IsValidTest, FuzzTest) {
         // vertices are random, we automatically get self-intersections and
         // loop crossings.  That leaves zero and NaN vertices, duplicate
         // vertices, and duplicate edges to be created explicitly.
-        if (rnd_->OneIn(10)) {
+        if (absl::Bernoulli(bitgen, 0.1)) {
           // Zero vertex.
           vloop->push_back(S2Point(0, 0, 0));
-        } else if (rnd_->OneIn(10)) {
+        } else if (absl::Bernoulli(bitgen, 0.1)) {
           // NaN vertex.
           vloop->push_back(numeric_limits<double>::quiet_NaN() * S2Point());
-        } else if (rnd_->OneIn(10) && !vloop->empty()) {
+        } else if (absl::Bernoulli(bitgen, 0.1) && !vloop->empty()) {
           // Duplicate vertex.
-          vloop->push_back((*vloop)[rnd_->Uniform(vloop->size())]);
-        } else if (rnd_->OneIn(10) && vloop->size() + 2 <= num_vertices) {
+          vloop->push_back(
+              (*vloop)[absl::Uniform<size_t>(bitgen, 0, vloop->size())]);
+        } else if (absl::Bernoulli(bitgen, 0.1) &&
+                   vloop->size() + 2 <= num_vertices) {
           // Try to copy an edge from a random loop.
-          vector<S2Point>* other = vloops_[rnd_->Uniform(vloops_.size())].get();
+          vector<S2Point>* other =
+              vloops_[absl::Uniform<size_t>(bitgen, 0, vloops_.size())].get();
           int n = other->size();
           if (n >= 2) {
-            int k0 = rnd_->Uniform(n);
+            int k0 = absl::Uniform(bitgen, 0, n);
             int k1 = (k0 + 1) % n;
-            if (rnd_->OneIn(2)) swap(k0, k1);  // Copy reversed edge.
+            if (absl::Bernoulli(bitgen, 0.5)) {
+              swap(k0, k1);  // Copy reversed edge.
+            }
             vloop->push_back((*other)[k0]);
             vloop->push_back((*other)[k1]);
           }
         } else {
           // Random non-unit-length point.
-          S2Point p = S2Testing::RandomPoint();
-          vloop->push_back(1e-30 * pow(1e60, rnd_->RandDouble()) * p);
+          S2Point p = s2random::Point(bitgen);
+          vloop->push_back(s2random::LogUniform(bitgen, 1e-30, 1e30) * p);
         }
       }
     }
-    CheckInvalid("");  // We could get any error message.
+    CheckInvalidOrEmpty(bitgen);
   }
 }
 
@@ -2822,48 +3012,48 @@ class S2PolygonDecodeTest : public ::testing::Test {
     encoder_.put32(value);
   }
 
-  void AppendRandomData(int size) {
+  void AppendRandomData(absl::BitGenRef bitgen, int size) {
     for (int i = 0; i < size && encoder_.avail() > 0; ++i) {
-      AppendByte(random_.Uniform(256));
+      AppendByte(absl::Uniform(bitgen, 0, 256));
     }
   }
 
-  void AppendRandomData() {
-    AppendRandomData(random_.Uniform(kMaxBytes));
+  void AppendRandomData(absl::BitGenRef bitgen) {
+    AppendRandomData(bitgen, /*size=*/absl::Uniform(bitgen, 0, kMaxBytes));
   }
 
-  void AppendFakeUncompressedEncodingData() {
-    AppendByte(1);                      // polygon number
-    AppendByte(0);                      // unused
-    AppendByte(0);                      // "has holes" flag
-    AppendInt32(PickRandomCount());     // num loops
-    AppendByte(1);                      // loop version
-    AppendInt32(PickRandomCount());     // num vertices
-    AppendRandomData();                 // junk to fill out the buffer
+  void AppendFakeUncompressedEncodingData(absl::BitGenRef bitgen) {
+    AppendByte(1);                         // polygon number
+    AppendByte(0);                         // unused
+    AppendByte(0);                         // "has holes" flag
+    AppendInt32(PickRandomCount(bitgen));  // num loops
+    AppendByte(1);                         // loop version
+    AppendInt32(PickRandomCount(bitgen));  // num vertices
+    AppendRandomData(bitgen);              // junk to fill out the buffer
   }
 
-  void AppendFakeCompressedEncodingData() {
-    AppendByte(4);                      // polygon number
-    AppendByte(random_.Uniform(50));    // snap level
-    AppendInt32(PickRandomCount());     // num loops
-    AppendInt32(PickRandomCount());     // num vertices
-    AppendRandomData();                 // junk to fill out the buffer
+  void AppendFakeCompressedEncodingData(absl::BitGenRef bitgen) {
+    AppendByte(4);                             // polygon number
+    AppendByte(absl::Uniform(bitgen, 0, 50));  // snap level
+    AppendInt32(PickRandomCount(bitgen));      // num loops
+    AppendInt32(PickRandomCount(bitgen));      // num vertices
+    AppendRandomData(bitgen);                  // junk to fill out the buffer
   }
 
-  int32 PickRandomCount() {
-    if (random_.OneIn(10)) {
+  int32_t PickRandomCount(absl::BitGenRef bitgen) {
+    if (absl::Bernoulli(bitgen, 0.1)) {
       return -1;
     }
-    if (random_.OneIn(10)) {
+    if (absl::Bernoulli(bitgen, 0.1)) {
       return 0;
     }
-    if (random_.OneIn(10)) {
-      return 1000000000;
+    if (absl::Bernoulli(bitgen, 0.1)) {
+      return 1'000'000'000;
     }
-    if (random_.OneIn(2)) {
-      return random_.Uniform(1000000000);
+    if (absl::Bernoulli(bitgen, 0.5)) {
+      return absl::Uniform(bitgen, 0, 1'000'000'000);
     }
-    return random_.Uniform(1000);
+    return absl::Uniform(bitgen, 0, 1000);
   }
 
   void Test() {
@@ -2876,14 +3066,11 @@ class S2PolygonDecodeTest : public ::testing::Test {
     static_cast<void>(polygon.Decode(&decoder_));
   }
 
-  // Random number generator.
-  S2Testing::Random random_;
-
   // Maximum size of the data array.
-  const int kMaxBytes = 256;
+  static constexpr int kMaxBytes = 256;
 
   // The data array.
-  absl::FixedArray<int8> data_array_;
+  absl::FixedArray<int8_t> data_array_;
 
   // Encoder that is used to put data into the array.
   Encoder encoder_;
@@ -2893,12 +3080,15 @@ class S2PolygonDecodeTest : public ::testing::Test {
 };
 
 TEST_F(S2PolygonDecodeTest, FuzzUncompressedEncoding) {
-  // Some parts of the S2 library S2_DCHECK on invalid data, even if we set
+  // Some parts of the S2 library ABSL_DCHECK on invalid data, even if we set
   // FLAGS_s2debug to false or use S2Polygon::set_s2debug_override. So we
   // only run this test in opt mode.
 #ifdef NDEBUG
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "FUZZ_UNCOMPRESSED_ENCODING",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
   for (int i = 0; i < 100000; ++i) {
-    AppendFakeUncompressedEncodingData();
+    AppendFakeUncompressedEncodingData(bitgen);
     Test();
   }
 #endif
@@ -2907,12 +3097,15 @@ TEST_F(S2PolygonDecodeTest, FuzzUncompressedEncoding) {
 #ifndef __EMSCRIPTEN__
 // TODO(b/231695412): Investigate further.
 TEST_F(S2PolygonDecodeTest, FuzzCompressedEncoding) {
-  // Some parts of the S2 library S2_DCHECK on invalid data, even if we set
+  // Some parts of the S2 library ABSL_DCHECK on invalid data, even if we set
   // FLAGS_s2debug to false or use S2Polygon::set_s2debug_override. So we
   // only run this test in opt mode.
 #ifdef NDEBUG
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "FUZZ_COMPRESSED_ENCODING",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
   for (int i = 0; i < 100000; ++i) {
-    AppendFakeCompressedEncodingData();
+    AppendFakeCompressedEncodingData(bitgen);
     Test();
   }
 #endif
@@ -2920,12 +3113,15 @@ TEST_F(S2PolygonDecodeTest, FuzzCompressedEncoding) {
 #endif
 
 TEST_F(S2PolygonDecodeTest, FuzzEverything) {
-  // Some parts of the S2 library S2_DCHECK on invalid data, even if we set
+  // Some parts of the S2 library ABSL_DCHECK on invalid data, even if we set
   // FLAGS_s2debug to false or use S2Polygon::set_s2debug_override. So we
   // only run this test in opt mode.
 #ifdef NDEBUG
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "FUZZ_EVERYTHING",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
   for (int i = 0; i < 100000; ++i) {
-    AppendRandomData();
+    AppendRandomData(bitgen);
     Test();
   }
 #endif
@@ -2954,7 +3150,7 @@ TEST_F(S2PolygonTestBase, EmptyPolygonShape) {
 }
 
 void TestPolygonShape(const S2Polygon& polygon) {
-  S2_DCHECK(!polygon.is_full());
+  ABSL_DCHECK(!polygon.is_full());
   S2Polygon::Shape shape(&polygon);
   EXPECT_EQ(&polygon, shape.polygon());
   EXPECT_EQ(polygon.num_vertices(), shape.num_edges());
@@ -2985,8 +3181,8 @@ TEST_F(S2PolygonTestBase, SeveralLoopPolygonShape) {
 }
 
 TEST(S2Polygon, ManyLoopPolygonShape) {
-  const int kNumLoops = 100;
-  const int kNumVerticesPerLoop = 6;
+  constexpr int kNumLoops = 100;
+  constexpr int kNumVerticesPerLoop = 6;
   S2Polygon polygon;
   S2Testing::ConcentricLoopsPolygon(S2Point(1, 0, 0), kNumLoops,
                                     kNumVerticesPerLoop, &polygon);
@@ -3010,19 +3206,21 @@ TEST(S2Polygon, PointInBigLoop) {
 
 TEST(S2Polygon, Sizes) {
   // This isn't really a test.  It just prints the sizes of various classes.
-  S2_LOG(INFO) << "sizeof(S2Loop): " << sizeof(S2Loop);
-  S2_LOG(INFO) << "sizeof(S2Polygon): " << sizeof(S2Polygon);
-  S2_LOG(INFO) << "sizeof(S2Polyline): " << sizeof(S2Polyline);
-  S2_LOG(INFO) << "sizeof(MutableS2ShapeIndex): " << sizeof(MutableS2ShapeIndex);
-  S2_LOG(INFO) << "sizeof(S2Polygon::Shape): " << sizeof(S2Polygon::Shape);
-  S2_LOG(INFO) << "sizeof(S2Cell): " << sizeof(S2Cell);
-  S2_LOG(INFO) << "sizeof(S2PaddedCell): " << sizeof(S2PaddedCell);
+  ABSL_LOG(INFO) << "sizeof(S2Loop): " << sizeof(S2Loop);
+  ABSL_LOG(INFO) << "sizeof(S2Polygon): " << sizeof(S2Polygon);
+  ABSL_LOG(INFO) << "sizeof(S2Polyline): " << sizeof(S2Polyline);
+  ABSL_LOG(INFO) << "sizeof(MutableS2ShapeIndex): "
+                 << sizeof(MutableS2ShapeIndex);
+  ABSL_LOG(INFO) << "sizeof(S2Polygon::Shape): " << sizeof(S2Polygon::Shape);
+  ABSL_LOG(INFO) << "sizeof(S2Cell): " << sizeof(S2Cell);
+  ABSL_LOG(INFO) << "sizeof(S2PaddedCell): " << sizeof(S2PaddedCell);
 }
 
 TEST_F(S2PolygonTestBase, IndexContainsOnePolygonShape) {
   const MutableS2ShapeIndex& index = near_0_->index();
   ASSERT_EQ(1, index.num_shape_ids());
-  S2Polygon::Shape* shape = down_cast<S2Polygon::Shape*>(index.shape(0));
+  const S2Polygon::Shape* shape =
+      down_cast<const S2Polygon::Shape*>(index.shape(0));
   EXPECT_EQ(near_0_.get(), shape->polygon());
 }
 
@@ -3039,8 +3237,8 @@ TEST_F(S2PolygonTestBase, PolygonPolygonDistance) {
 TEST(S2Polygon, S2CoderWorks) {
   using s2textformat::ToString;
 
-  const int kNumLoops = 10;
-  const int kNumVerticesPerLoop = 10;
+  constexpr int kNumLoops = 10;
+  constexpr int kNumVerticesPerLoop = 10;
   S2Polygon polygon;
   S2Testing::ConcentricLoopsPolygon(S2Point(1, 0, 0), kNumLoops,
                                     kNumVerticesPerLoop, &polygon);

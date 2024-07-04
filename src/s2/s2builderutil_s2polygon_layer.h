@@ -36,8 +36,7 @@
 #include <utility>
 #include <vector>
 
-#include "s2/base/logging.h"
-#include "absl/container/btree_map.h"
+#include "absl/container/flat_hash_map.h"
 #include "s2/id_set_lexicon.h"
 #include "s2/mutable_s2shape_index.h"
 #include "s2/s2builder.h"
@@ -121,7 +120,7 @@ class S2PolygonLayer : public S2Builder::Layer {
   // The labels associated with the edge "polygon.loop(i).vertex({j, j+1})"
   // can be retrieved as follows:
   //
-  //   for (int32 label : label_set_lexicon.id_set(label_set_ids[i][j])) {...}
+  //   for (int32_t label : label_set_lexicon.id_set(label_set_ids[i][j])) {...}
   using LabelSetIds = std::vector<std::vector<LabelSetId>>;
   S2PolygonLayer(S2Polygon* polygon, LabelSetIds* label_set_ids,
                  IdSetLexicon* label_set_lexicon,
@@ -139,7 +138,7 @@ class S2PolygonLayer : public S2Builder::Layer {
                      std::vector<std::unique_ptr<S2Loop>>* loops) const;
   void AppendEdgeLabels(const Graph& g,
                         const std::vector<Graph::EdgeLoop>& edge_loops);
-  using LoopMap = absl::btree_map<S2Loop*, std::pair<int, bool>>;
+  using LoopMap = absl::flat_hash_map<S2Loop*, std::pair<int, bool>>;
   void InitLoopMap(const std::vector<std::unique_ptr<S2Loop>>& loops,
                    LoopMap* loop_map) const;
   void ReorderEdgeLabels(const LoopMap& loop_map);

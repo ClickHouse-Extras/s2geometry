@@ -26,14 +26,19 @@
 #include <string>
 #include <vector>
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "absl/base/macros.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/flags/marshalling.h"
+#include "absl/log/absl_check.h"
+#include "absl/log/absl_log.h"
+#include "absl/log/log_streamer.h"
+#include "absl/random/bit_gen_ref.h"
+#include "absl/random/random.h"
 #include "absl/strings/string_view.h"
 
-#include "s2/base/logging.h"
-#include "s2/base/integral_types.h"
 #include "s2/r1interval.h"
 #include "s2/r2.h"
 #include "s2/r2rect.h"
@@ -45,6 +50,7 @@
 #include "s2/s2latlng.h"
 #include "s2/s2metrics.h"
 #include "s2/s2point.h"
+#include "s2/s2random.h"
 #include "s2/s2testing.h"
 #include "s2/util/coding/coder.h"
 
@@ -55,10 +61,13 @@ using std::fabs;
 using std::min;
 using std::string;
 using std::vector;
+using ::testing::Eq;
+using ::testing::IsEmpty;
+using ::testing::UnorderedElementsAre;
 
 static S2CellId GetCellId(double lat_degrees, double lng_degrees) {
   S2CellId id(S2LatLng::FromDegrees(lat_degrees, lng_degrees));
-  S2_LOG(INFO) << std::hex << id.id();
+  ABSL_LOG(INFO) << std::hex << id.id();
   return id;
 }
 
@@ -128,33 +137,33 @@ TEST(S2CellId, CenterSiTi) {
 
   // Leaf level, 30.
   id.GetCenterSiTi(&si, &ti);
-  S2_CHECK_EQ(1 << 0, si & 1);
-  S2_CHECK_EQ(1 << 0, ti & 1);
+  ABSL_CHECK_EQ(1 << 0, si & 1);
+  ABSL_CHECK_EQ(1 << 0, ti & 1);
 
   // Level 29.
   id.parent(S2CellId::kMaxLevel - 1).GetCenterSiTi(&si, &ti);
-  S2_CHECK_EQ(1 << 1, si & 3);
-  S2_CHECK_EQ(1 << 1, ti & 3);
+  ABSL_CHECK_EQ(1 << 1, si & 3);
+  ABSL_CHECK_EQ(1 << 1, ti & 3);
 
   // Level 28.
   id.parent(S2CellId::kMaxLevel - 2).GetCenterSiTi(&si, &ti);
-  S2_CHECK_EQ(1 << 2, si & 7);
-  S2_CHECK_EQ(1 << 2, ti & 7);
+  ABSL_CHECK_EQ(1 << 2, si & 7);
+  ABSL_CHECK_EQ(1 << 2, ti & 7);
 
   // Level 20.
   id.parent(S2CellId::kMaxLevel - 10).GetCenterSiTi(&si, &ti);
-  S2_CHECK_EQ(1 << 10, si & ((1 << 11) - 1));
-  S2_CHECK_EQ(1 << 10, ti & ((1 << 11) - 1));
+  ABSL_CHECK_EQ(1 << 10, si & ((1 << 11) - 1));
+  ABSL_CHECK_EQ(1 << 10, ti & ((1 << 11) - 1));
 
   // Level 10.
   id.parent(S2CellId::kMaxLevel - 20).GetCenterSiTi(&si, &ti);
-  S2_CHECK_EQ(1 << 20, si & ((1 << 21) - 1));
-  S2_CHECK_EQ(1 << 20, ti & ((1 << 21) - 1));
+  ABSL_CHECK_EQ(1 << 20, si & ((1 << 21) - 1));
+  ABSL_CHECK_EQ(1 << 20, ti & ((1 << 21) - 1));
 
   // Level 0.
   id.parent(0).GetCenterSiTi(&si, &ti);
-  S2_CHECK_EQ(1 << 30, si & ((1U << 31) - 1));
-  S2_CHECK_EQ(1 << 30, ti & ((1U << 31) - 1));
+  ABSL_CHECK_EQ(1 << 30, si & ((1U << 31) - 1));
+  ABSL_CHECK_EQ(1 << 30, ti & ((1U << 31) - 1));
 }
 
 TEST(S2CellId, Wrapping) {
@@ -192,7 +201,7 @@ TEST(S2CellId, Advance) {
             id.child_begin(S2CellId::kMaxLevel).advance(256));
   EXPECT_EQ(S2CellId::FromFacePosLevel(5, 0, S2CellId::kMaxLevel),
             S2CellId::FromFacePosLevel(1, 0, S2CellId::kMaxLevel)
-                .advance(uint64{4} << (2 * S2CellId::kMaxLevel)));
+                .advance(uint64_t{4} << (2 * S2CellId::kMaxLevel)));
 
   // Check basic properties of advance_wrap().
   EXPECT_EQ(S2CellId::FromFace(1), S2CellId::Begin(0).advance_wrap(7));
@@ -205,12 +214,12 @@ TEST(S2CellId, Advance) {
             id.child_begin(S2CellId::kMaxLevel).advance_wrap(256));
   EXPECT_EQ(S2CellId::FromFacePosLevel(1, 0, S2CellId::kMaxLevel),
             S2CellId::FromFacePosLevel(5, 0, S2CellId::kMaxLevel)
-                .advance_wrap(uint64{2} << (2 * S2CellId::kMaxLevel)));
+                .advance_wrap(uint64_t{2} << (2 * S2CellId::kMaxLevel)));
 }
 
 TEST(S2CellId, DistanceFromBegin) {
   EXPECT_EQ(6, S2CellId::End(0).distance_from_begin());
-  EXPECT_EQ(6 * (int64{1} << (2 * S2CellId::kMaxLevel)),
+  EXPECT_EQ(6 * (int64_t{1} << (2 * S2CellId::kMaxLevel)),
             S2CellId::End(S2CellId::kMaxLevel).distance_from_begin());
 
   EXPECT_EQ(0, S2CellId::Begin(0).distance_from_begin());
@@ -223,8 +232,11 @@ TEST(S2CellId, DistanceFromBegin) {
 
 TEST(S2CellId, MaximumTile) {
   // This method is tested more thoroughly in s2cell_union_test.cc.
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "MAXIMUM_TILE",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
   for (int iter = 0; iter < 1000; ++iter) {
-    S2CellId id = S2Testing::GetRandomCellId(10);
+    S2CellId id = s2random::CellId(bitgen, 10);
 
     // Check that "limit" is returned for tiles at or beyond "limit".
     EXPECT_EQ(id, id.maximum_tile(id));
@@ -286,8 +298,11 @@ TEST(S2CellId, GetCommonAncestorLevel) {
 
 TEST(S2CellId, Inverses) {
   // Check the conversion of random leaf cells to S2LatLngs and back.
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "INVERSES",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
   for (int i = 0; i < 200000; ++i) {
-    S2CellId id = S2Testing::GetRandomCellId(S2CellId::kMaxLevel);
+    S2CellId id = s2random::CellId(bitgen, S2CellId::kMaxLevel);
     EXPECT_TRUE(id.is_leaf());
     EXPECT_EQ(S2CellId::kMaxLevel, id.level());
     S2LatLng center = id.ToLatLng();
@@ -297,8 +312,11 @@ TEST(S2CellId, Inverses) {
 
 TEST(S2CellId, Tokens) {
   // Test random cell ids at all levels.
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "TOKENS",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
   for (int i = 0; i < 10000; ++i) {
-    S2CellId id = S2Testing::GetRandomCellId();
+    S2CellId id = s2random::CellId(bitgen);
     string token = id.ToToken();
     EXPECT_LE(token.size(), 16);
     EXPECT_EQ(id, S2CellId::FromToken(token));
@@ -368,7 +386,7 @@ TEST(S2CellId, LegacyCoder) {
 
 TEST(S2CellId, LegacyCoderTokenInvalid) {
   // Token too long
-  string_view invalid_token = "000000000000000404\0";
+  string_view invalid_token = "000000000000000404";
   Decoder decoder(invalid_token.data(), invalid_token.size());
   S2CellId decoded;
   S2Error error;
@@ -408,13 +426,13 @@ TEST(S2CellId, LegacyCoderMany) {
   // Encode valid S2CellIds interspersed with sentinel values. We go all the way
   // to kMaxLevel to ensure that we exercise all possible lengths of the token
   // format.
-  for (int64 i = 0; i <= S2CellId::kMaxLevel; ++i) {
+  for (int64_t i = 0; i <= S2CellId::kMaxLevel; ++i) {
     coder.Encode(encoder, S2CellId::FromFacePosLevel(0, 0, i));
     coder.Encode(encoder, S2CellId::None());
   }
 
   Decoder decoder(encoder.base(), encoder.length());
-  for (int64 i = 0; i <= S2CellId::kMaxLevel; ++i) {
+  for (int64_t i = 0; i <= S2CellId::kMaxLevel; ++i) {
     S2CellId cell_id;
     S2Error error;
 
@@ -426,7 +444,7 @@ TEST(S2CellId, LegacyCoderMany) {
   }
 }
 
-static const int kMaxExpandLevel = 3;
+static constexpr int kMaxExpandLevel = 3;
 
 static void ExpandCell(
     S2CellId parent, vector<S2CellId>* cells,
@@ -485,7 +503,7 @@ TEST(S2CellId, Containment) {
   }
 }
 
-static const int kMaxWalkLevel = 8;
+static constexpr int kMaxWalkLevel = 8;
 
 TEST(S2CellId, Continuity) {
   // Make sure that sequentially increasing cell ids form a continuous
@@ -517,18 +535,21 @@ TEST(S2CellId, Coverage) {
   // adjacent values of "i" or "j".  (It is sqrt(2/3) rather than 1/2 because
   // the cells at the corners of each face are stretched -- they have 60 and
   // 120 degree angles.)
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "COVERAGE",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
 
   double max_dist = 0.5 * S2::kMaxDiag.GetValue(S2CellId::kMaxLevel);
   for (int i = 0; i < 1000000; ++i) {
-    S2Point p = S2Testing::RandomPoint();
+    S2Point p = s2random::Point(bitgen);
     S2Point q = S2CellId(p).ToPointRaw();
     EXPECT_LE(p.Angle(q), max_dist);
   }
 }
 
 static void TestAllNeighbors(S2CellId id, int level) {
-  S2_DCHECK_GE(level, id.level());
-  S2_DCHECK_LT(level, S2CellId::kMaxLevel);
+  ABSL_DCHECK_GE(level, id.level());
+  ABSL_DCHECK_LT(level, S2CellId::kMaxLevel);
 
   // We compute AppendAllNeighbors, and then add in all the children of "id"
   // at the given level.  We then compare this against the result of finding
@@ -561,7 +582,7 @@ TEST(S2CellId, Neighbors) {
 
   // Check the edge neighbors of the corner cells at all levels.  This case is
   // trickier because it requires projecting onto adjacent faces.
-  static const int kMaxIJ = S2CellId::kMaxSize - 1;
+  static constexpr int kMaxIJ = S2CellId::kMaxSize - 1;
   for (int level = 1; level <= S2CellId::kMaxLevel; ++level) {
     S2CellId id = S2CellId::FromFaceIJ(1, 0, 0).parent(level);
     S2CellId nbrs[4];
@@ -598,24 +619,72 @@ TEST(S2CellId, Neighbors) {
 
   // Check that AppendAllNeighbors produces results that are consistent
   // with AppendVertexNeighbors for a bunch of random cells.
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "NEIGHBORS",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
   for (int i = 0; i < 1000; ++i) {
-    S2CellId id = S2Testing::GetRandomCellId();
+    S2CellId id = s2random::CellId(bitgen);
     if (id.is_leaf()) id = id.parent();
 
     // TestAllNeighbors computes approximately 2**(2*(diff+1)) cell ids,
     // so it's not reasonable to use large values of "diff".
     int max_diff = min(5, S2CellId::kMaxLevel - id.level() - 1);
-    int level = id.level() + S2Testing::rnd.Uniform(max_diff + 1);
+    int level = id.level() + absl::Uniform(bitgen, 0, max_diff + 1);
     TestAllNeighbors(id, level);
   }
 }
 
+TEST(S2CellId, CornerCellHas7Neighbors) {
+  // NOTE: This is a very special case, this cell is a corner of one face and
+  // has thus only 7 neighbors.
+  const auto id = S2CellId::FromDebugString("3/0000");
+  std::vector<S2CellId> output;
+  id.AppendAllNeighbors(id.level(), &output);
+  EXPECT_THAT(output,
+              UnorderedElementsAre(S2CellId::FromDebugString("1/2221"),
+                                   S2CellId::FromDebugString("1/2222"),
+                                   S2CellId::FromDebugString("2/3330"),
+                                   S2CellId::FromDebugString("2/3333"),
+                                   S2CellId::FromDebugString("2/3333"),
+                                   S2CellId::FromDebugString("3/0001"),
+                                   S2CellId::FromDebugString("3/0002"),
+                                   S2CellId::FromDebugString("3/0003")));
+}
+
+TEST(S2CellId, AllTopLevelFaceNeighbors) {
+  const auto id = S2CellId::FromDebugString("3/");
+  std::vector<S2CellId> output;
+  id.AppendAllNeighbors(id.level(), &output);
+  EXPECT_THAT(
+      output,
+      UnorderedElementsAre(
+          S2CellId::FromDebugString("1/"), S2CellId::FromDebugString("2/"),
+          S2CellId::FromDebugString("2/"), S2CellId::FromDebugString("2/"),
+          S2CellId::FromDebugString("4/"), S2CellId::FromDebugString("5/"),
+          S2CellId::FromDebugString("5/"), S2CellId::FromDebugString("5/")));
+}
+
+TEST(S2CellId, AllNeighborsForZurich) {
+  const auto id = S2CellId::FromDebugString("2/033020001100");
+  std::vector<S2CellId> output;
+  id.AppendAllNeighbors(id.level(), &output);
+  EXPECT_THAT(output, UnorderedElementsAre(
+                          S2CellId::FromDebugString("2/033020001030"),
+                          S2CellId::FromDebugString("2/033020001033"),
+                          S2CellId::FromDebugString("2/033020001101"),
+                          S2CellId::FromDebugString("2/033020001102"),
+                          S2CellId::FromDebugString("2/033020001103"),
+                          S2CellId::FromDebugString("2/033031110010"),
+                          S2CellId::FromDebugString("2/033031110011"),
+                          S2CellId::FromDebugString("2/033031110322")));
+}
+
 // Returns a random point on the boundary of the given rectangle.
-static R2Point SampleBoundary(const R2Rect& rect) {
+static R2Point SampleBoundary(absl::BitGenRef bitgen, const R2Rect& rect) {
   R2Point uv;
-  int d = S2Testing::rnd.Uniform(2);
-  uv[d] = S2Testing::rnd.UniformDouble(rect[d][0], rect[d][1]);
-  uv[1-d] = S2Testing::rnd.OneIn(2) ? rect[1-d][0] : rect[1-d][1];
+  int d = absl::Uniform(bitgen, 0, 2);
+  uv[d] = absl::Uniform(bitgen, rect[d][0], rect[d][1]);
+  uv[1 - d] = absl::Bernoulli(bitgen, 0.5) ? rect[1 - d][0] : rect[1 - d][1];
   return uv;
 }
 
@@ -629,21 +698,23 @@ static R2Point ProjectToBoundary(const R2Point& uv, const R2Rect& rect) {
   if (du0 == dmin) return R2Point(rect[0][0], rect[1].Project(uv[1]));
   if (du1 == dmin) return R2Point(rect[0][1], rect[1].Project(uv[1]));
   if (dv0 == dmin) return R2Point(rect[0].Project(uv[0]), rect[1][0]);
-  S2_CHECK_EQ(dmin, dv1) << "Bug in ProjectToBoundary";
+  ABSL_CHECK_EQ(dmin, dv1) << "Bug in ProjectToBoundary";
   return R2Point(rect[0].Project(uv[0]), rect[1][1]);
 }
 
-void TestExpandedByDistanceUV(S2CellId id, S1Angle distance) {
+void TestExpandedByDistanceUV(absl::BitGenRef bitgen, S2CellId id,
+                              S1Angle distance) {
   R2Rect bound = id.GetBoundUV();
   R2Rect expanded = S2CellId::ExpandedByDistanceUV(bound, distance);
   for (int iter = 0; iter < 100; ++iter) {
     // Choose a point on the boundary of the rectangle.
-    int face = S2Testing::rnd.Uniform(6);
-    R2Point center_uv = SampleBoundary(bound);
+    int face = absl::Uniform(bitgen, 0, 6);
+    R2Point center_uv = SampleBoundary(bitgen, bound);
     S2Point center = S2::FaceUVtoXYZ(face, center_uv).Normalize();
 
     // Now sample a point from a disc of radius (2 * distance).
-    S2Point p = S2Testing::SamplePoint(S2Cap(center, 2 * distance.abs()));
+    S2Point p =
+        s2random::SamplePoint(bitgen, S2Cap(center, 2 * distance.abs()));
 
     // Find the closest point on the boundary to the sampled point.
     R2Point uv;
@@ -669,12 +740,15 @@ void TestExpandedByDistanceUV(S2CellId id, S1Angle distance) {
 }
 
 TEST(S2CellId, ExpandedByDistanceUV) {
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "EXPANDED_BY_DISTANCE_UV",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
   double max_dist_degrees = 10;
   for (int iter = 0; iter < 100; ++iter) {
-    S2CellId id = S2Testing::GetRandomCellId();
-    double dist_degrees = S2Testing::rnd.UniformDouble(-max_dist_degrees,
-                                                       max_dist_degrees);
-    TestExpandedByDistanceUV(id, S1Angle::Degrees(dist_degrees));
+    S2CellId id = s2random::CellId(bitgen);
+    double dist_degrees =
+        absl::Uniform(bitgen, -max_dist_degrees, max_dist_degrees);
+    TestExpandedByDistanceUV(bitgen, id, S1Angle::Degrees(dist_degrees));
   }
 }
 
@@ -714,5 +788,25 @@ TEST(S2CellId, S2CoderWorks) {
   S2Error error;
   auto decoded = s2coding::RoundTrip(S2CellId::Coder(), cell, error);
   EXPECT_EQ(cell, decoded);
+}
+
+TEST(S2CellId, AbslParseFlag) {
+  S2CellId id;
+  string error;
+  EXPECT_TRUE(absl::ParseFlag("89c25", &id, &error));
+  EXPECT_THAT(id, S2CellId::FromToken("89c25"));
+  EXPECT_THAT(error, IsEmpty());
+}
+
+TEST(S2CellId, AbslParseFlagError) {
+  S2CellId id;
+  string error;
+  EXPECT_FALSE(absl::ParseFlag("invalid token", &id, &error));
+  EXPECT_THAT(error, Not(IsEmpty()));
+}
+
+TEST(S2CellId, AbslUnparseFlag) {
+  S2CellId id = S2CellId::FromToken("89c25");
+  EXPECT_THAT(absl::UnparseFlag(id), Eq(id.ToToken()));
 }
 

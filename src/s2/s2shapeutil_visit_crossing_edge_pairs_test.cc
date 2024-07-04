@@ -27,6 +27,7 @@
 
 #include <gtest/gtest.h>
 
+#include "absl/log/absl_log.h"
 #include "absl/strings/string_view.h"
 
 #include "s2/mutable_s2shape_index.h"
@@ -193,7 +194,7 @@ TEST(GetCrossingEdgePairs, NoIntersectionsTwoIndexes) {
 }
 
 TEST(GetCrossingEdgePairs, EdgeGridOneIndex) {
-  const int kGridSize = 10;
+  constexpr int kGridSize = 10;
   double epsilon = 1e-10;
   // There are 11 horizontal and 11 vertical lines. The expected number of
   // interior crossings is 9x9, plus 9 "touching" intersections along each of
@@ -219,7 +220,7 @@ TEST(GetCrossingEdgePairs, EdgeGridOneIndex) {
 }
 
 TEST(GetCrossingEdgePairs, EdgeGridTwoIndexes) {
-  const int kGridSize = 10;
+  constexpr int kGridSize = 10;
   double epsilon = 1e-10;
 
   MutableS2ShapeIndex indexA;
@@ -246,7 +247,7 @@ TEST(GetCrossingEdgePairs, EdgeGridTwoIndexes) {
 static bool HasSelfIntersection(const MutableS2ShapeIndex& index) {
   S2Error error;
   if (s2shapeutil::FindSelfIntersection(index, &error)) {
-    S2_VLOG(1) << error;
+    ABSL_VLOG(1) << error;
     return true;
   }
   return false;
@@ -277,7 +278,7 @@ void TestHasCrossingPermutations(vector<unique_ptr<S2Loop>>* loops, int i,
   }
 }
 
-// Given a string reprsenting a polygon, and a boolean indicating whether this
+// Given a string representing a polygon, and a boolean indicating whether this
 // polygon has any self-intersections or loop crossings, verify that
 // HasSelfIntersection returns the expected result for all possible cyclic
 // permutations of the loop vertices.

@@ -26,6 +26,9 @@
 
 #include <gtest/gtest.h>
 
+#include "absl/log/log_streamer.h"
+#include "absl/random/bit_gen_ref.h"
+#include "absl/random/random.h"
 #include "absl/strings/string_view.h"
 
 #include "s2/s1angle.h"
@@ -38,6 +41,7 @@
 #include "s2/s2pointutil.h"
 #include "s2/s2polyline.h"
 #include "s2/s2predicates.h"
+#include "s2/s2random.h"
 #include "s2/s2testing.h"
 #include "s2/s2text_format.h"
 
@@ -76,21 +80,25 @@ TEST(S2, GetUpdateMinDistanceMaxError) {
 TEST(S2, GetUpdateMinInteriorDistanceMaxError) {
   // Check that the error bound returned by
   // GetUpdateMinInteriorDistanceMaxError() is large enough.
-  auto& rnd = S2Testing::rnd;
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "GET_UPDATE_MIN_INTERIOR_DISTANCE_MAX_ERROR",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
   for (int iter = 0; iter < 10000; ++iter) {
-    S2Point a0 = S2Testing::RandomPoint();
-    S1Angle len = S1Angle::Radians(M_PI * pow(1e-20, rnd.RandDouble()));
-    if (rnd.OneIn(4)) len = S1Angle::Radians(M_PI) - len;
-    S2Point a1 = S2::GetPointOnLine(a0, S2Testing::RandomPoint(), len);
+    S2Point a0 = s2random::Point(bitgen);
+    S1Angle len =
+        S1Angle::Radians(M_PI * s2random::LogUniform(bitgen, 1e-20, 1.0));
+    if (absl::Bernoulli(bitgen, 1.0 / 4)) len = S1Angle::Radians(M_PI) - len;
+    S2Point a1 = S2::GetPointOnLine(a0, s2random::Point(bitgen), len);
 
     // TODO(ericv): The error bound holds for antipodal points, but the S2
     // predicates used to test the error do not support antipodal points yet.
     if (a1 == -a0) continue;
     S2Point n = S2::RobustCrossProd(a0, a1).Normalize();
-    double f = pow(1e-20, rnd.RandDouble());
+    double f = s2random::LogUniform(bitgen, 1e-20, 1.0);
     S2Point a = ((1 - f) * a0 + f * a1).Normalize();
-    S1Angle r = S1Angle::Radians(M_PI_2 * pow(1e-20, rnd.RandDouble()));
-    if (rnd.OneIn(2)) r = S1Angle::Radians(M_PI_2) - r;
+    S1Angle r =
+        S1Angle::Radians(M_PI_2 * s2random::LogUniform(bitgen, 1e-20, 1.0));
+    if (absl::Bernoulli(bitgen, 1.0 / 2)) r = S1Angle::Radians(M_PI_2) - r;
     S2Point x = S2::GetPointOnLine(a, n, r);
     S1ChordAngle min_dist = S1ChordAngle::Infinity();
     if (!S2::UpdateMinInteriorDistance(x, a0, a1, &min_dist)) {
@@ -260,23 +268,26 @@ TEST(S2, MaxDistance) {
 // Chooses a random S2Point that is often near the intersection of one of the
 // coodinates planes or coordinate axes with the unit sphere.  (It is possible
 // to represent very small perturbations near such points.)
-S2Point ChoosePoint() {
-  S2Point x = S2Testing::RandomPoint();
+S2Point ChoosePoint(absl::BitGenRef bitgen) {
+  S2Point x = s2random::Point(bitgen);
   for (int i = 0; i < 3; ++i) {
-    if (S2Testing::rnd.OneIn(3)) {
-      x[i] *= pow(1e-50, S2Testing::rnd.RandDouble());
+    if (absl::Bernoulli(bitgen, 1.0 / 3)) {
+      x[i] *= s2random::LogUniform(bitgen, 1e-50, 1.0);
     }
   }
   return x.Normalize();
 }
 
 TEST(S2, ProjectError) {
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "PROJECT_ERROR",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
   for (int iter = 0; iter < 1000; ++iter) {
-    S2Testing::rnd.Reset(iter + 1);  // Easier to reproduce a specific case.
-    S2Point a = ChoosePoint();
-    S2Point b = ChoosePoint();
+    S2Point a = ChoosePoint(bitgen);
+    S2Point b = ChoosePoint(bitgen);
     S2Point n = S2::RobustCrossProd(a, b).Normalize();
-    S2Point x = S2Testing::SamplePoint(S2Cap(n, S1Angle::Radians(1e-15)));
+    S2Point x =
+        s2random::SamplePoint(bitgen, S2Cap(n, S1Angle::Radians(1e-15)));
     S2Point p = S2::Project(x, a, b);
     EXPECT_LT(s2pred::CompareEdgeDistance(
         p, a, b, S1ChordAngle(S2::kProjectPerpendicularError)), 0);
@@ -393,9 +404,12 @@ TEST(S2, InterpolateCanExtrapolate) {
 TEST(S2, RepeatedInterpolation) {
   // Check that points do not drift away from unit length when repeated
   // interpolations are done.
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "REPEATED_INTERPOLATION",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
   for (int i = 0; i < 100; ++i) {
-    S2Point a = S2Testing::RandomPoint();
-    S2Point b = S2Testing::RandomPoint();
+    S2Point a = s2random::Point(bitgen);
+    S2Point b = s2random::Point(bitgen);
     for (int j = 0; j < 1000; ++j) {
       a = S2::Interpolate(a, b, 0.01);
     }
@@ -575,6 +589,48 @@ bool IsEdgeBNearEdgeA(string_view a_str, string_view b_str,
   return S2::IsEdgeBNearEdgeA(a->vertex(0), a->vertex(1),
                               b->vertex(0), b->vertex(1),
                               S1Angle::Degrees(max_error_degrees));
+}
+
+TEST(IsEdgePairDistanceLess, Coverage) {
+  using S2::IsEdgePairDistanceLess;
+
+  S2Point x(1, 0, 0), y(0, 1, 0), z(0, 0, 1);
+  S2Point a(1, 1e-100, 1e-99), b(1, 1e-100, -1e-99);
+
+  const S1ChordAngle kZeroRad = S1ChordAngle::Zero();
+  const S1ChordAngle kOneRad = S1ChordAngle::Radians(1);
+  const S1ChordAngle kOver90 = S1ChordAngle::Radians(M_PI / 2 + .001);
+
+  // Test cases where the edges have an interior crossing.  Nothing can be
+  // closer than zero, so check that zero distance compares false.
+  EXPECT_EQ(IsEdgePairDistanceLess(x, y, a, b, kZeroRad), false);
+  EXPECT_EQ(IsEdgePairDistanceLess(x, y, a, b, kOneRad), true);
+
+  // Test cases where the edges share an endpoint.
+  EXPECT_EQ(IsEdgePairDistanceLess(x, y, x, z, kOneRad), true);
+  EXPECT_EQ(IsEdgePairDistanceLess(x, y, z, x, kOneRad), true);
+  EXPECT_EQ(IsEdgePairDistanceLess(y, x, x, z, kOneRad), true);
+  EXPECT_EQ(IsEdgePairDistanceLess(y, x, z, x, kOneRad), true);
+
+  // Test cases where one edge is degenerate.
+  EXPECT_EQ(IsEdgePairDistanceLess(x, x, x, y, kOneRad), true);
+  EXPECT_EQ(IsEdgePairDistanceLess(x, y, x, x, kOneRad), true);
+  EXPECT_EQ(IsEdgePairDistanceLess(x, x, y, z, kOneRad), false);
+  EXPECT_EQ(IsEdgePairDistanceLess(x, x, y, z, kOver90), true);
+  EXPECT_EQ(IsEdgePairDistanceLess(y, z, x, x, kOneRad), false);
+  EXPECT_EQ(IsEdgePairDistanceLess(y, z, x, x, kOver90), true);
+
+  // Test cases where both edges are degenerate.
+  EXPECT_EQ(IsEdgePairDistanceLess(x, x, x, x, kOneRad), true);
+  EXPECT_EQ(IsEdgePairDistanceLess(x, x, y, y, kOneRad), false);
+  EXPECT_EQ(IsEdgePairDistanceLess(x, x, y, y, kOver90), true);
+
+  // Test cases where the minimum distance is non-zero and is achieved at each
+  // of the four edge endpoints.
+  EXPECT_EQ(IsEdgePairDistanceLess(a, y, x, z, kOneRad), true);
+  EXPECT_EQ(IsEdgePairDistanceLess(y, a, x, z, kOneRad), true);
+  EXPECT_EQ(IsEdgePairDistanceLess(x, z, a, y, kOneRad), true);
+  EXPECT_EQ(IsEdgePairDistanceLess(x, z, y, a, kOneRad), true);
 }
 
 TEST(S2, EdgeBNearEdgeA) {

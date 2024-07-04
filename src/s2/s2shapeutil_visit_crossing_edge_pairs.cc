@@ -17,11 +17,12 @@
 
 #include "s2/s2shapeutil_visit_crossing_edge_pairs.h"
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
-#include "s2/base/integral_types.h"
 #include "absl/container/inlined_vector.h"
+#include "absl/log/absl_check.h"
 #include "absl/strings/str_format.h"
 #include "s2/s2cell_id.h"
 #include "s2/s2cell_range_iterator.h"
@@ -51,10 +52,14 @@ static void AppendShapeEdges(const S2ShapeIndex& index,
                              ShapeEdgeVector* shape_edges) {
   for (int s = 0; s < cell.num_clipped(); ++s) {
     const S2ClippedShape& clipped = cell.clipped(s);
-    const S2Shape& shape = *index.shape(clipped.shape_id());
+
+    int shape_id = clipped.shape_id();
+    const S2Shape& shape = *index.shape(shape_id);
+
     int num_edges = clipped.num_edges();
     for (int i = 0; i < num_edges; ++i) {
-      shape_edges->push_back(ShapeEdge(shape, clipped.edge(i)));
+      int edge_id = clipped.edge(i);
+      shape_edges->push_back(ShapeEdge(shape_id, edge_id, shape.edge(edge_id)));
     }
   }
 }
@@ -284,7 +289,7 @@ inline bool IndexCrosser::VisitCellCellCrossings(
 bool IndexCrosser::VisitCrossings(
     S2CellRangeIterator<S2ShapeIndex::Iterator>* ai,
     S2CellRangeIterator<S2ShapeIndex::Iterator>* bi) {
-  S2_DCHECK(ai->id().contains(bi->id()));
+  ABSL_DCHECK(ai->id().contains(bi->id()));
   if (ai->iterator().cell().num_edges() == 0) {
     // Skip over the cells of B using binary search.
     bi->SeekBeyond(*ai);
@@ -347,7 +352,7 @@ bool VisitCrossingEdgePairs(const S2ShapeIndex& a_index,
       bi.SeekTo(ai);
     } else {
       // One cell contains the other.  Determine which cell is larger.
-      int64 ab_relation = ai.id().lsb() - bi.id().lsb();
+      int64_t ab_relation = ai.id().lsb() - bi.id().lsb();
       if (ab_relation > 0) {
         // A's index cell is larger.
         if (!ab.VisitCrossings(&ai, &bi)) return false;
@@ -380,7 +385,7 @@ static void InitLoopError(S2Error::Code code,
                           bool is_polygon, S2Error* error) {
   error->Init(code, format, ap.offset, bp.offset);
   if (is_polygon) {
-    error->Init(code, "Loop %d: %s", ap.chain_id, error->text().c_str());
+    error->Init(code, "Loop %d: %s", ap.chain_id, error->text());
   }
 }
 
@@ -448,7 +453,7 @@ static bool FindCrossingError(const S2Shape& shape,
 
 bool FindSelfIntersection(const S2ShapeIndex& index, S2Error* error) {
   if (index.num_shape_ids() == 0) return false;
-  S2_DCHECK_EQ(1, index.num_shape_ids());
+  ABSL_DCHECK_EQ(1, index.num_shape_ids());
   const S2Shape& shape = *index.shape(0);
 
   // Visit all crossing pairs except possibly for ones of the form (AB, BC),

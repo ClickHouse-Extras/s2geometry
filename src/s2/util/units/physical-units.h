@@ -45,7 +45,7 @@
 //     // completely equivalent to using float, but prevents unitless
 //     // angles from being passed.
 //     void SetLatitude(Radians angle) {
-//       S2_CHECK(angle.abs() < Degrees(90.0));
+//       ABSL_CHECK(angle.abs() < Degrees(90.0));
 //       latitude_ = angle;
 //       latitude_radius_ = EARTH_RADIUS * cos(angle.value());
 //     }
@@ -93,7 +93,7 @@
 #include <string>
 #include <type_traits>
 
-#include "s2/base/integral_types.h"
+#include "s2/base/types.h"
 #include "absl/base/macros.h"
 
 namespace util {
@@ -125,15 +125,15 @@ struct UnitConverter {
     return static_cast<Float>(
         (static_cast<double>(
             value * (static_cast<double>(
-                         static_cast<uint64>(ToUnit::SCALE_NUMERATOR) *
+                         static_cast<uint64_t>(ToUnit::SCALE_NUMERATOR) *
                          FromUnit::SCALE_DENOMINATOR) /
                      static_cast<double>(
-                         static_cast<uint64>(ToUnit::SCALE_DENOMINATOR) *
+                         static_cast<uint64_t>(ToUnit::SCALE_DENOMINATOR) *
                          FromUnit::SCALE_NUMERATOR)))) -
-        (static_cast<double>(static_cast<uint64>(ToUnit::SCALE_NUMERATOR) *
+        (static_cast<double>(static_cast<uint64_t>(ToUnit::SCALE_NUMERATOR) *
                              FromUnit::SCALE_DENOMINATOR *
                              FromUnit::OFFSET_NUMERATOR) /
-         static_cast<double>(static_cast<uint64>(ToUnit::SCALE_DENOMINATOR) *
+         static_cast<double>(static_cast<uint64_t>(ToUnit::SCALE_DENOMINATOR) *
                              FromUnit::SCALE_NUMERATOR *
                              FromUnit::OFFSET_DENOMINATOR)) +
         (static_cast<double>(ToUnit::OFFSET_NUMERATOR) /

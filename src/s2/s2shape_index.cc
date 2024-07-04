@@ -17,7 +17,9 @@
 
 #include "s2/s2shape_index.h"
 
-#include "s2/base/integral_types.h"
+#include <cstdint>
+
+#include "absl/log/absl_check.h"
 #include "s2/util/coding/coder.h"
 #include "s2/util/coding/varint.h"
 #include "s2/util/gtl/compact_array.h"
@@ -83,9 +85,9 @@ void S2ShapeIndexCell::Encode(int num_shape_ids, Encoder* encoder) const {
   if (num_shape_ids == 1) {
     // If the entire S2ShapeIndex contains just one shape, then we don't need
     // to encode any shape ids.  This is a very important and common case.
-    S2_DCHECK_EQ(num_clipped(), 1);  // Index invariant: no empty cells.
+    ABSL_DCHECK_EQ(num_clipped(), 1);  // Index invariant: no empty cells.
     const S2ClippedShape& clipped = this->clipped(0);
-    S2_DCHECK_EQ(clipped.shape_id(), 0);
+    ABSL_DCHECK_EQ(clipped.shape_id(), 0);
     int n = clipped.num_edges();
     encoder->Ensure(Varint::kMax64 + n * Varint::kMax32);
     if (n >= 2 && n <= 17 && clipped.edge(n - 1) - clipped.edge(0) == n - 1) {
@@ -98,7 +100,7 @@ void S2ShapeIndexCell::Encode(int num_shape_ids, Encoder* encoder) const {
       //           bit 1: contains_center
       //           bits 2-5: (num_edges - 2)
       //           bits 6+: edge_id
-      encoder->put_varint64(static_cast<uint64>(clipped.edge(0)) << 6 |
+      encoder->put_varint64(static_cast<uint64_t>(clipped.edge(0)) << 6 |
                             (n - 2) << 2 | clipped.contains_center() << 1 | 0);
     } else if (n == 1) {
       // The cell contains only one edge.  For edge ids up to 15, we can
@@ -107,7 +109,7 @@ void S2ShapeIndexCell::Encode(int num_shape_ids, Encoder* encoder) const {
       // Encoding: bits 0-1: 1
       //           bit 2: contains_center
       //           bits 3+: edge_id
-      encoder->put_varint64(static_cast<uint64>(clipped.edge(0)) << 3 |
+      encoder->put_varint64(static_cast<uint64_t>(clipped.edge(0)) << 3 |
                             clipped.contains_center() << 2 | 1);
     } else {
       // General case (including n == 0, which is encoded compactly here).
@@ -115,7 +117,7 @@ void S2ShapeIndexCell::Encode(int num_shape_ids, Encoder* encoder) const {
       // Encoding: bits 0-1: 3
       //           bit 2: contains_center
       //           bits 3+: num_edges
-      encoder->put_varint64(static_cast<uint64>(n) << 3 |
+      encoder->put_varint64(static_cast<uint64_t>(n) << 3 |
                             clipped.contains_center() << 2 | 3);
       EncodeEdges(clipped, encoder);
     }
@@ -131,7 +133,7 @@ void S2ShapeIndexCell::Encode(int num_shape_ids, Encoder* encoder) const {
     int shape_id_base = 0;
     for (int j = 0; j < num_clipped(); ++j) {
       const S2ClippedShape& clipped = this->clipped(j);
-      S2_DCHECK_GE(clipped.shape_id(), shape_id_base);
+      ABSL_DCHECK_GE(clipped.shape_id(), shape_id_base);
       int shape_delta = clipped.shape_id() - shape_id_base;
       shape_id_base = clipped.shape_id() + 1;
 
@@ -187,7 +189,7 @@ bool S2ShapeIndexCell::Decode(int num_shape_ids, Decoder* decoder) {
   if (num_shape_ids == 1) {
     // Entire S2ShapeIndex contains only one shape.
     S2ClippedShape* clipped = add_shapes(1);
-    uint64 header;
+    uint64_t header;
     if (!decoder->get_varint64(&header)) return false;
     if ((header & 1) == 0) {
       // The cell contains a contiguous range of edges.
@@ -213,7 +215,7 @@ bool S2ShapeIndexCell::Decode(int num_shape_ids, Decoder* decoder) {
     return DecodeEdges(num_edges, clipped, decoder);
   }
   // S2ShapeIndex contains more than one shape.
-  uint32 header;
+  uint32_t header;
   if (!decoder->get_varint32(&header)) return false;
   int num_clipped = 1;
   if ((header & 7) == 3) {
@@ -227,7 +229,7 @@ bool S2ShapeIndexCell::Decode(int num_shape_ids, Decoder* decoder) {
     if (j > 0 && !decoder->get_varint32(&header)) return false;
     if ((header & 1) == 0) {
       // The clipped shape contains a contiguous range of edges.
-      uint32 shape_id_count = 0;
+      uint32_t shape_id_count = 0;
       if (!decoder->get_varint32(&shape_id_count)) return false;
       shape_id += shape_id_count >> 4;
       int num_edges = (shape_id_count & 15) + 1;
@@ -243,8 +245,8 @@ bool S2ShapeIndexCell::Decode(int num_shape_ids, Decoder* decoder) {
       clipped->set_contains_center((header & 8) != 0);
     } else {
       // The clipped shape contains some other combination of edges.
-      S2_DCHECK_EQ(header & 3, 1);
-      uint32 shape_delta;
+      ABSL_DCHECK_EQ(header & 3, 1);
+      uint32_t shape_delta;
       if (!decoder->get_varint32(&shape_delta)) return false;
       shape_id += shape_delta;
       int num_edges = (header >> 3) + 1;
@@ -273,7 +275,7 @@ inline void S2ShapeIndexCell::EncodeEdges(const S2ClippedShape& clipped,
   int num_edges = clipped.num_edges();
   for (int i = 0; i < num_edges; ++i) {
     int edge_id = clipped.edge(i);
-    S2_DCHECK_GE(edge_id, edge_id_base);
+    ABSL_DCHECK_GE(edge_id, edge_id_base);
     int delta = edge_id - edge_id_base;
     if (i + 1 == num_edges) {
       // This is the last edge; no need to encode an edge count.
@@ -301,16 +303,16 @@ inline bool S2ShapeIndexCell::DecodeEdges(int num_edges,
                                           S2ClippedShape* clipped,
                                           Decoder* decoder) {
   // This function inverts the encodings documented above.
-  int32 edge_id = 0;
+  int32_t edge_id = 0;
   for (int i = 0; i < num_edges; ) {
-    uint32 delta;
+    uint32_t delta;
     if (!decoder->get_varint32(&delta)) return false;
     if (i + 1 == num_edges) {
       // The last edge is encoded without an edge count.
       clipped->set_edge(i++, edge_id + delta);
     } else {
       // Otherwise decode the count and edge delta.
-      uint32 count = (delta & 7) + 1;
+      uint32_t count = (delta & 7) + 1;
       delta >>= 3;
       if (count == 8) {
         count = delta + 8;
@@ -318,7 +320,7 @@ inline bool S2ShapeIndexCell::DecodeEdges(int num_edges,
       }
 
       // Guard against overflowing edge memory for bad inputs.
-      if (static_cast<int32>(i + count) > num_edges) {
+      if (static_cast<int32_t>(i + count) > num_edges) {
         return false;
       }
 

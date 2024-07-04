@@ -23,12 +23,14 @@
 #include <memory>
 #include <vector>
 
-#include "s2/base/integral_types.h"
 #include <gtest/gtest.h>
+#include "absl/log/log_streamer.h"
+#include "absl/random/random.h"
 #include "s2/util/coding/coder.h"
 #include "s2/mutable_s2shape_index.h"
 #include "s2/s1angle.h"
 #include "s2/s2cell_id.h"
+#include "s2/s2fractal.h"
 #include "s2/s2loop.h"
 #include "s2/s2point.h"
 #include "s2/s2pointutil.h"
@@ -65,11 +67,12 @@ void TestEncodedS2CellIdVector(const vector<S2CellId>& expected,
   EXPECT_EQ(actual.Decode(), expected);
 }
 
-// Like the above, but accepts a vector<uint64> rather than a vector<S2CellId>.
-void TestEncodedS2CellIdVector(const vector<uint64>& raw_expected,
+// Like the above, but accepts a vector<uint64_t> rather than a
+// vector<S2CellId>.
+void TestEncodedS2CellIdVector(const vector<uint64_t>& raw_expected,
                                size_t expected_bytes) {
   vector<S2CellId> expected;
-  for (uint64 raw_id : raw_expected) {
+  for (uint64_t raw_id : raw_expected) {
     expected.push_back(S2CellId(raw_id));
   }
   TestEncodedS2CellIdVector(expected, expected_bytes);
@@ -152,7 +155,7 @@ TEST(EncodedS2CellIdVector, OneByteRangeWithBaseValue) {
 }
 
 TEST(EncodedS2CellIdVector, MaxShiftRange) {
-  const vector<uint8> bytes = {
+  const vector<uint8_t> bytes = {
       (31 << 3)  // 31 -> add 29 to bytes[1].
           + 1,   // Number of encoded cell IDs.
       27,        // 27+29 is the maximum supported shift.
@@ -164,7 +167,7 @@ TEST(EncodedS2CellIdVector, MaxShiftRange) {
 }
 
 TEST(EncodedS2CellIdVector, ShiftOutOfRange) {
-  const vector<uint8> bytes = {
+  const vector<uint8_t> bytes = {
       (31 << 3)  // 31 -> add 29 to bytes[1].
           + 1,   // Number of encoded cell IDs.
       28,        // 28+29 is greater than the maximum supported shift of 56.
@@ -194,7 +197,10 @@ TEST(EncodedS2CellIdVector, FourLevel10Children) {
 }
 
 TEST(EncodedS2CellIdVector, FractalS2ShapeIndexCells) {
-  S2Testing::Fractal fractal;
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "FRACTAL_S2_SHAPE_INDEX_CELLS",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
+  S2Fractal fractal(bitgen);
   fractal.SetLevelForApproxMaxEdges(3 * 1024);
   S2Point center = s2textformat::MakePointOrDie("47.677:-122.206");
   MutableS2ShapeIndex index;
@@ -210,7 +216,7 @@ TEST(EncodedS2CellIdVector, FractalS2ShapeIndexCells) {
 }
 
 TEST(EncodedS2CellIdVector, CoveringCells) {
-  vector<uint64> ids{
+  vector<uint64_t> ids{
       0x414a617f00000000, 0x414a61c000000000, 0x414a624000000000,
       0x414a63c000000000, 0x414a647000000000, 0x414a64c000000000,
       0x414a653000000000, 0x414a704000000000, 0x414a70c000000000,

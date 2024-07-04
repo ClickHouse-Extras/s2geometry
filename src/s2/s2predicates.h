@@ -53,7 +53,8 @@
 #include <ostream>
 
 #include "absl/flags/flag.h"
-#include "s2/_fp_contract_off.h"
+#include "absl/log/absl_check.h"
+#include "s2/_fp_contract_off.h"  // IWYU pragma: keep
 #include "s2/s1chord_angle.h"
 #include "s2/s2debug.h"
 #include "s2/s2point.h"
@@ -169,7 +170,7 @@ int CompareEdgeDirections(const S2Point& a0, const S2Point& a1,
 int SignDotProd(const S2Point& a, const S2Point& b);
 
 // Forms the intersection of edge AB with the great circle specified by normal N
-// as (A×B)×N and computes the sign of that point dotted with Y.
+// as (A×B)×N and computes the sign of that point dotted with X.
 //
 // When you have an edge you know crosses a cell boundary corresponding to N,
 // then this function can tell you whether the intersection point is to the
@@ -390,20 +391,32 @@ inline int TriageSign(const S2Point& a, const S2Point& b,
   //
   // In order to support vectors of magnitude <= sqrt(2), we double this value.
   const double kMaxDetError = 3.6548 * DBL_EPSILON;
-  S2_DCHECK_LE(a.Norm2(), 2);
-  S2_DCHECK_LE(b.Norm2(), 2);
-  S2_DCHECK_LE(c.Norm2(), 2);
-  S2_DCHECK_EQ(a_cross_b, a.CrossProd(b));
+  ABSL_DCHECK_LE(a.Norm2(), 2);
+  ABSL_DCHECK_LE(b.Norm2(), 2);
+  ABSL_DCHECK_LE(c.Norm2(), 2);
+  ABSL_DCHECK_EQ(a_cross_b, a.CrossProd(b));
   double det = a_cross_b.DotProd(c);
 
   // Double-check borderline cases in debug mode.
-  S2_DCHECK(!absl::GetFlag(FLAGS_s2debug) || std::fabs(det) <= kMaxDetError ||
-         std::fabs(det) >= 100 * kMaxDetError ||
-         det * ExpensiveSign(a, b, c) > 0);
+  ABSL_DCHECK(!absl::GetFlag(FLAGS_s2debug) || std::fabs(det) <= kMaxDetError ||
+              std::fabs(det) >= 100 * kMaxDetError ||
+              det * ExpensiveSign(a, b, c) > 0);
 
   if (det > kMaxDetError) return 1;
   if (det < -kMaxDetError) return -1;
   return 0;
+}
+
+// Like Sign, except this method does not use symbolic perturbations when the
+// input points are exactly coplanar with the origin (i.e., linearly dependent).
+// Clients should never use this method, but it is useful here in order to
+// implement the combined pedestal/axis-aligned perturbation scheme used by some
+// methods (such as EdgeCircumcenterSign).
+inline int UnperturbedSign(const S2Point& a, const S2Point& b,
+                           const S2Point& c) {
+  int sign = TriageSign(a, b, c, a.CrossProd(b));
+  if (sign == 0) sign = ExpensiveSign(a, b, c, false /*perturb*/);
+  return sign;
 }
 
 }  // namespace s2pred

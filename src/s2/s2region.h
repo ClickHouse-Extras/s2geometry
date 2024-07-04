@@ -20,7 +20,7 @@
 
 #include <vector>
 
-#include "s2/_fp_contract_off.h"
+#include "s2/_fp_contract_off.h"  // IWYU pragma: keep
 #include "s2/s1angle.h"
 #include "s2/s2point.h"
 
@@ -40,9 +40,6 @@ class S2LatLngRect;
 // is restricted to methods that are useful for computing approximations.
 class S2Region {
  public:
-  S2Region() = default;
-  S2Region(const S2Region& other) = default;
-  S2Region& operator=(const S2Region&) = default;
   virtual ~S2Region() = default;
 
   // Returns a deep copy of the region.
@@ -75,8 +72,10 @@ class S2Region {
   // computed quickly.  The result is used by S2RegionCoverer as a starting
   // point for further refinement.
   //
-  // TODO(ericv): Remove the default implementation.
-  virtual void GetCellUnionBound(std::vector<S2CellId> *cell_ids) const;
+  // `GetCapBound().GetCellUnionBound(cell_ids)` and
+  // `GetRectBound().GetCellUnionBound(cell_ids)` are always valid
+  // implementations, but something better should be done if possible.
+  virtual void GetCellUnionBound(std::vector<S2CellId>* cell_ids) const = 0;
 
   // Returns true if the region completely contains the given cell, otherwise
   // either the region does not contain the cell or the containment relationship
@@ -130,6 +129,16 @@ class S2Region {
   // Returns true on success.
   //
   // bool Decode(Decoder* const decoder);
+
+ protected:
+  S2Region() = default;
+  // Allow derived classes to define copy/move.  They may assume S2Region has
+  // no members.  Default the move assign/constructor as well so derived
+  // classes can default their constructors/assignment operator.
+  S2Region(const S2Region&) = default;
+  S2Region(S2Region&&) = default;
+  S2Region& operator=(const S2Region&) = default;
+  S2Region& operator=(S2Region&&) = default;
 };
 
 #endif  // S2_S2REGION_H_

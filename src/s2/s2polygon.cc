@@ -22,21 +22,25 @@
 #include <atomic>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <queue>
 #include <stack>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
 #include "absl/container/fixed_array.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/flags/flag.h"
+#include "absl/log/absl_check.h"
+#include "absl/log/absl_log.h"
 #include "absl/utility/utility.h"
 
+#include "s2/base/casts.h"
 #include "s2/base/commandlineflags.h"
-#include "s2/base/integral_types.h"
-#include "s2/base/logging.h"
+#include "s2/base/types.h"
 #include "s2/mutable_s2shape_index.h"
 #include "s2/r1interval.h"
 #include "s2/r2.h"
@@ -85,6 +89,7 @@ using s2builderutil::S2PolygonLayer;
 using s2builderutil::S2PolylineLayer;
 using s2builderutil::S2PolylineVectorLayer;
 using std::fabs;
+using std::forward_as_tuple;
 using std::greater;
 using std::make_unique;
 using std::pair;
@@ -92,12 +97,6 @@ using std::priority_queue;
 using std::sqrt;
 using std::unique_ptr;
 using std::vector;
-
-S2_DEFINE_bool(
-    s2polygon_lazy_indexing, true,
-    "Build the S2ShapeIndex only when it is first needed.  This can save "
-    "significant amounts of memory and time when geometry is constructed but "
-    "never queried, for example when converting from one format to another.");
 
 // The maximum number of loops we'll allow when decoding a polygon.
 // The default value of 10 million is 200x bigger than the number of
@@ -111,12 +110,7 @@ S2_DEFINE_int32(
 static const unsigned char kCurrentUncompressedEncodingVersionNumber = 1;
 static const unsigned char kCurrentCompressedEncodingVersionNumber = 4;
 
-S2Polygon::S2Polygon()
-    : s2debug_override_(S2Debug::ALLOW),
-      error_inconsistent_loop_orientations_(false),
-      num_vertices_(0),
-      unindexed_contains_calls_(0) {
-}
+S2Polygon::S2Polygon() = default;
 
 S2Polygon::S2Polygon(vector<unique_ptr<S2Loop>> loops, S2Debug override)
     : s2debug_override_(override) {
@@ -133,13 +127,13 @@ S2Polygon::S2Polygon(const S2Cell& cell)
   Init(make_unique<S2Loop>(cell));
 }
 
-S2Polygon::S2Polygon(S2Polygon&& b)
-    : S2Region(std::move(b)),
-      loops_(std::move(b.loops_)),
+S2Polygon::S2Polygon(S2Polygon&& b) noexcept
+    // S2Region has no members, so does not need to be moved.
+    : loops_(std::move(b.loops_)),
       s2debug_override_(std::move(b.s2debug_override_)),
       error_inconsistent_loop_orientations_(
-          absl::exchange(b.error_inconsistent_loop_orientations_, 0)),
-      num_vertices_(absl::exchange(b.num_vertices_, 0)),
+          std::exchange(b.error_inconsistent_loop_orientations_, 0)),
+      num_vertices_(std::exchange(b.num_vertices_, 0)),
       unindexed_contains_calls_(
           b.unindexed_contains_calls_.exchange(0, std::memory_order_relaxed)),
       bound_(std::move(b.bound_)),
@@ -148,21 +142,18 @@ S2Polygon::S2Polygon(S2Polygon&& b)
   // `index_` has a pointer to an S2Polygon::Shape which points to S2Polygon.
   // But, we've moved to a new address, so get the Shape back out of the index
   // and update it to point to our new location.
-  for (S2Shape* shape : index_) {
-    down_cast<Shape*>(shape)->polygon_ = this;
+  for (const S2Shape* shape : index_) {
+    const_cast<Shape*>(down_cast<const Shape*>(shape))->polygon_ = this;
   }
 }
 
-S2Polygon& S2Polygon::operator=(S2Polygon&& b) {
-  // We need to delegate to our parent move-assignment operator since we can't
-  // move any of its private state.  This is a little odd since b is in a
-  // half-moved state after calling but is ultimately safe.
-  S2Region::operator=(static_cast<S2Region&&>(b));
+S2Polygon& S2Polygon::operator=(S2Polygon&& b) noexcept {
+  // S2Region has no members, so does not need to be assigned.
   loops_ = std::move(b.loops_);
   s2debug_override_ = std::move(b.s2debug_override_);
   error_inconsistent_loop_orientations_ =
-      absl::exchange(b.error_inconsistent_loop_orientations_, 0);
-  num_vertices_ = absl::exchange(b.num_vertices_, 0);
+      std::exchange(b.error_inconsistent_loop_orientations_, 0);
+  num_vertices_ = std::exchange(b.num_vertices_, 0);
   unindexed_contains_calls_.store(
       b.unindexed_contains_calls_.exchange(0, std::memory_order_relaxed),
       std::memory_order_relaxed);
@@ -173,8 +164,8 @@ S2Polygon& S2Polygon::operator=(S2Polygon&& b) {
   // `index_` has a pointer to an S2Polygon::Shape which points to S2Polygon.
   // But, we've moved to a new address, so get the Shape back out of the index
   // and update it to point to our new location.
-  for (S2Shape* shape : index_) {
-    down_cast<Shape*>(shape)->polygon_ = this;
+  for (const S2Shape* shape : index_) {
+    const_cast<Shape*>(down_cast<const Shape*>(shape))->polygon_ = this;
   }
 
   return *this;
@@ -233,7 +224,7 @@ S2Polygon::~S2Polygon() {
 bool S2Polygon::IsValid() const {
   S2Error error;
   if (FindValidationError(&error)) {
-    S2_LOG_IF(ERROR, absl::GetFlag(FLAGS_s2debug)) << error;
+    ABSL_LOG_IF(ERROR, absl::GetFlag(FLAGS_s2debug)) << error;
     return false;
   }
   return true;
@@ -243,17 +234,10 @@ bool S2Polygon::FindValidationError(S2Error* error) const {
   for (int i = 0; i < num_loops(); ++i) {
     // Check for loop errors that don't require building an S2ShapeIndex.
     if (loop(i)->FindValidationErrorNoIndex(error)) {
-      error->Init(error->code(),
-                  "Loop %d: %s", i, error->text().c_str());
+      error->Init(error->code(), "Loop %d: %s", i, error->text());
       return true;
     }
-    // Check that no loop is empty, and that the full loop only appears in the
-    // full polygon.
-    if (loop(i)->is_empty()) {
-      error->Init(S2Error::POLYGON_EMPTY_LOOP,
-                  "Loop %d: empty loops are not allowed", i);
-      return true;
-    }
+    // Check that the full loop only appears in the full polygon.
     if (loop(i)->is_full() && num_loops() > 1) {
       error->Init(S2Error::POLYGON_EXCESS_FULL_LOOP,
                   "Loop %d: full loop appears in non-full polygon", i);
@@ -355,7 +339,7 @@ void S2Polygon::InitLoops(LoopMap* loop_map) {
     const vector<S2Loop*>& children = (*loop_map)[loop];
     for (int i = children.size() - 1; i >= 0; --i) {
       S2Loop* child = children[i];
-      S2_DCHECK(child != nullptr);
+      ABSL_DCHECK(child != nullptr);
       child->set_depth(depth + 1);
       loop_stack.push(child);
     }
@@ -363,14 +347,11 @@ void S2Polygon::InitLoops(LoopMap* loop_map) {
 }
 
 void S2Polygon::InitIndex() {
-  S2_DCHECK_EQ(0, index_.num_shape_ids());
+  ABSL_DCHECK_EQ(0, index_.num_shape_ids());
   index_.Add(make_unique<Shape>(this));
-  if (!absl::GetFlag(FLAGS_s2polygon_lazy_indexing)) {
-    index_.ForceBuild();
-  }
   if (absl::GetFlag(FLAGS_s2debug) && s2debug_override_ == S2Debug::ALLOW) {
     // Note that FLAGS_s2debug is false in optimized builds (by default).
-    S2_CHECK(IsValid());
+    ABSL_CHECK(IsValid());
   }
 }
 
@@ -379,7 +360,23 @@ void S2Polygon::ClearIndex() {
   index_.Clear();
 }
 
+void S2Polygon::ForceBuildIndex() {
+  for (auto& loop : loops_) loop->ForceBuildIndex();
+  index_.ForceBuild();
+}
+
 void S2Polygon::InitNested(vector<unique_ptr<S2Loop>> loops) {
+  using std::swap;
+
+  // Remove any empty loops, they're not allowed in a Polygon.
+  for (int i = 0; i < loops.size(); ++i) {
+    if (loops[i]->is_empty() || loops[i]->num_vertices() == 0) {
+      swap(loops[i], loops.back());
+      loops.pop_back();
+      --i;  // Process this index again.
+    }
+  }
+
   ClearLoops();
   loops_.swap(loops);
 
@@ -403,10 +400,8 @@ void S2Polygon::InitNested(vector<unique_ptr<S2Loop>> loops) {
 }
 
 void S2Polygon::Init(unique_ptr<S2Loop> loop) {
-  // We don't allow empty loops in the other Init() methods because deleting
-  // them changes the number of loops, which is awkward to handle.
   ClearLoops();
-  if (loop->is_empty()) {
+  if (loop->is_empty() || loop->num_vertices() == 0) {
     InitLoopProperties();
   } else {
     loops_.push_back(std::move(loop));
@@ -417,7 +412,7 @@ void S2Polygon::Init(unique_ptr<S2Loop> loop) {
 // This is an internal method that expects that loops_ has already been
 // initialized with a single non-empty loop.
 void S2Polygon::InitOneLoop() {
-  S2_DCHECK_EQ(1, num_loops());
+  ABSL_DCHECK_EQ(1, num_loops());
   S2Loop* loop = loops_[0].get();
   loop->set_depth(0);
   error_inconsistent_loop_orientations_ = false;
@@ -464,6 +459,15 @@ void S2Polygon::InitOriented(vector<unique_ptr<S2Loop>> loops) {
   //    necessary if the polygon requires at least one non-normalized loop to
   //    represent it.
 
+  // Remove any empty loops, they're not allowed in a Polygon.
+  for (int i = 0; i < loops.size(); ++i) {
+    if (loops[i]->is_empty() || loops[i]->num_vertices() == 0) {
+      swap(loops[i], loops.back());
+      loops.pop_back();
+      --i;  // Process this index again.
+    }
+  }
+
   flat_hash_set<const S2Loop*> contained_origin;
   for (size_t i = 0; i < loops.size(); ++i) {
     S2Loop* loop = loops[i].get();
@@ -506,7 +510,7 @@ void S2Polygon::InitOriented(vector<unique_ptr<S2Loop>> loops) {
       if (absl::GetFlag(FLAGS_s2debug) && s2debug_override_ == S2Debug::ALLOW) {
         // The FLAGS_s2debug validity checking usually happens in InitIndex(),
         // but this error is detected too late for that.
-        S2_CHECK(IsValid());  // Always fails.
+        ABSL_CHECK(IsValid());  // Always fails.
       }
     }
   }
@@ -788,7 +792,7 @@ void S2Polygon::EncodeUncompressed(Encoder* const encoder) const {
   }
   encoder->put8(has_holes);
   encoder->put32(loops_.size());
-  S2_DCHECK_GE(encoder->avail(), 0);
+  ABSL_DCHECK_GE(encoder->avail(), 0);
 
   for (int i = 0; i < num_loops(); ++i) {
     loop(i)->Encode(encoder);
@@ -809,14 +813,14 @@ bool S2Polygon::Decode(Decoder* const decoder) {
 }
 
 bool S2Polygon::DecodeUncompressed(Decoder* const decoder) {
-  if (decoder->avail() < 2 * sizeof(uint8) + sizeof(uint32)) return false;
+  if (decoder->avail() < 2 * sizeof(uint8_t) + sizeof(uint32_t)) return false;
   ClearLoops();
   decoder->get8();  // Ignore irrelevant serialized owns_loops_ value.
   decoder->get8();  // Ignore irrelevant serialized has_holes_ value.
   // Polygons with no loops are explicitly allowed here: a newly created
   // polygon has zero loops and such polygons encode and decode properly.
-  const uint32 num_loops = decoder->get32();
-  if (num_loops > static_cast<uint32>(
+  const uint32_t num_loops = decoder->get32();
+  if (num_loops > static_cast<uint32_t>(
                       absl::GetFlag(FLAGS_s2polygon_decode_max_num_loops)))
     return false;
   loops_.reserve(num_loops);
@@ -825,6 +829,13 @@ bool S2Polygon::DecodeUncompressed(Decoder* const decoder) {
     loops_.push_back(make_unique<S2Loop>());
     loops_.back()->set_s2debug_override(s2debug_override());
     if (!loops_.back()->Decode(decoder)) return false;
+
+    // Ignore any empty loops that were previously encoded.
+    if (loops_.back()->is_empty() || loops_.back()->num_vertices() == 0) {
+      loops_.pop_back();
+      continue;
+    }
+
     num_vertices_ += loops_.back()->num_vertices();
   }
   if (!bound_.Decode(decoder)) return false;
@@ -855,7 +866,7 @@ void S2Polygon::Invert() {
   // Inverting any one loop will invert the polygon.  The best loop to invert
   // is the one whose area is largest, since this yields the smallest area
   // after inversion.  The loop with the largest area is always at depth 0.
-  // The descendents of this loop all have their depth reduced by 1, while the
+  // The descendants of this loop all have their depth reduced by 1, while the
   // former siblings of this loop all have their depth increased by 1.
 
   // The empty and full polygons are handled specially.
@@ -907,7 +918,7 @@ void S2Polygon::Invert() {
       }
     }
     loops_.swap(new_loops);
-    S2_DCHECK_EQ(new_loops.size(), num_loops());
+    ABSL_DCHECK_EQ(new_loops.size(), num_loops());
   }
   ClearIndex();
   InitLoopProperties();
@@ -934,8 +945,8 @@ void S2Polygon::InitToOperation(S2BooleanOperation::OpType op_type,
                                 const S2Polygon& a, const S2Polygon& b) {
   S2Error error;
   if (!InitToOperation(op_type, snap_function, a, b, &error)) {
-    S2_LOG(ERROR) << S2BooleanOperation::OpTypeToString(op_type)
-                << " operation failed: " << error;
+    ABSL_LOG(ERROR) << S2BooleanOperation::OpTypeToString(op_type)
+                     << " operation failed: " << error;
   }
 }
 
@@ -1024,10 +1035,10 @@ void S2Polygon::InitFromBuilder(const S2Polygon& a, S2Builder* builder) {
   builder->AddPolygon(a);
   S2Error error;
   if (!builder->Build(&error)) {
-    S2_LOG(ERROR) << "Could not build polygon: " << error;
+    ABSL_LOG(ERROR) << "Could not build polygon: " << error;
   }
-  // If there are no loops, check whether the result should be the full
-  // polygon rather than the empty one.  (See InitToIntersection.)
+  // If there are no loops, check whether the result should be the full polygon
+  // rather than the empty one.
   if (num_loops() == 0) {
     if (a.bound_.Area() > 2 * M_PI && a.GetArea() > 2 * M_PI) Invert();
   }
@@ -1056,14 +1067,14 @@ void S2Polygon::InitToSimplified(const S2Polygon& a,
 // comparisons are to within a maximum "u" or "v" error of "tolerance_uv".
 // Bit "i" in the result is set if and only "p" is incident to the edge
 // corresponding to S2Cell::edge(i).
-uint8 GetCellEdgeIncidenceMask(const S2Cell& cell, const S2Point& p,
+uint8_t GetCellEdgeIncidenceMask(const S2Cell& cell, const S2Point& p,
                                  double tolerance_uv) {
-  uint8 mask = 0;
+  uint8_t mask = 0;
   R2Point uv;
   if (S2::FaceXYZtoUV(cell.face(), p, &uv)) {
     R2Rect bound = cell.GetBoundUV();
     if (absl::GetFlag(FLAGS_s2debug))
-      S2_DCHECK(bound.Expanded(tolerance_uv).Contains(uv));
+      ABSL_DCHECK(bound.Expanded(tolerance_uv).Contains(uv));
     if (fabs(uv[1] - bound[1][0]) <= tolerance_uv) mask |= 1;
     if (fabs(uv[0] - bound[0][1]) <= tolerance_uv) mask |= 2;
     if (fabs(uv[1] - bound[1][1]) <= tolerance_uv) mask |= 4;
@@ -1139,11 +1150,11 @@ void S2Polygon::InitToSimplifiedInCell(const S2Polygon& a, const S2Cell& cell,
   }
   S2Error error;
   if (!builder.Build(&error)) {
-    S2_LOG(ERROR) << "Could not build polygon: " << error;
+    ABSL_LOG(ERROR) << "Could not build polygon: " << error;
     return;
   }
   // If there are no loops, check whether the result should be the full
-  // polygon rather than the empty one.  (See InitToIntersection.)
+  // polygon rather than the empty one.
   if (num_loops() == 0) {
     if (a.bound_.Area() > 2 * M_PI && a.GetArea() > 2 * M_PI) Invert();
   }
@@ -1163,18 +1174,18 @@ vector<unique_ptr<S2Polyline>> S2Polygon::SimplifyEdgesInCell(
   for (int i = 0; i < a.num_loops(); ++i) {
     const S2Loop& a_loop = *a.loop(i);
     const S2Point* v0 = &a_loop.oriented_vertex(0);
-    uint8 mask0 = GetCellEdgeIncidenceMask(cell, *v0, tolerance_uv);
+    uint8_t mask0 = GetCellEdgeIncidenceMask(cell, *v0, tolerance_uv);
     bool in_interior = false;  // Was the last edge an interior edge?
     for (int j = 1; j <= a_loop.num_vertices(); ++j) {
       const S2Point* v1 = &a_loop.oriented_vertex(j);
-      uint8 mask1 = GetCellEdgeIncidenceMask(cell, *v1, tolerance_uv);
+      uint8_t mask1 = GetCellEdgeIncidenceMask(cell, *v1, tolerance_uv);
       if ((mask0 & mask1) != 0) {
         // This is an edge along the cell boundary.  Such edges do not get
         // simplified; we add them directly to the output.  (We create a
         // separate polyline for each edge to keep things simple.)  We call
         // ForceVertex on all boundary vertices to ensure that they don't
         // move, and so that nearby interior edges are snapped to them.
-        S2_DCHECK(!in_interior);
+        ABSL_DCHECK(!in_interior);
         builder.ForceVertex(*v1);
         polylines.emplace_back(new S2Polyline(vector<S2Point>{*v0, *v1}));
       } else {
@@ -1200,7 +1211,7 @@ vector<unique_ptr<S2Polyline>> S2Polygon::SimplifyEdgesInCell(
   }
   S2Error error;
   if (!builder.Build(&error)) {
-    S2_LOG(ERROR) << "InitToSimplifiedInCell failed: " << error;
+    ABSL_LOG(ERROR) << "InitToSimplifiedInCell failed: " << error;
   }
   return polylines;
 }
@@ -1222,8 +1233,9 @@ vector<unique_ptr<S2Polyline>> S2Polygon::OperationWithPolyline(
   a_index.Add(make_unique<S2Polyline::Shape>(&a));
   S2Error error;
   if (!op.Build(a_index, index_, &error)) {
-    S2_LOG(ERROR) << "Polyline " << S2BooleanOperation::OpTypeToString(op_type)
-                << " operation failed: " << error;
+    ABSL_LOG(ERROR) << "Polyline "
+                     << S2BooleanOperation::OpTypeToString(op_type)
+                     << " operation failed: " << error;
   }
   return result;
 }
@@ -1298,41 +1310,45 @@ unique_ptr<S2Polygon> S2Polygon::DestructiveUnion(
 
   // Create a priority queue of polygons in order of number of vertices.
   // Repeatedly union the two smallest polygons and add the result to the
-  // queue until we have a single polygon to return.  We use the index
-  // into `polygons` as the second component of the pair instead of a
-  // pointer so the comparison is deterministic rather than depending
-  // on the polygon's address.  (Some clients depend on determinism.)
-  using Pair = pair<int, size_t>;  // (num vertices, `polygons` index)
-  using PriorityQueue = priority_queue<Pair, vector<Pair>, greater<Pair>>;
+  // queue until we have a single polygon to return.
+  struct NumVerticesGreater {
+    bool operator()(unique_ptr<S2Polygon>* a, unique_ptr<S2Polygon>* b) const {
+      // Include raw pointer into `polygons` (equivalent to array index) in
+      // comparison for stability.  Otherwise, the results in the case of
+      // equal vertices would be non-deterministic.  (Some clients depend on
+      // determinism.)  We cannot compare the `S2Polygon*`s since this would
+      // not be reproducible across different runs.
+      return forward_as_tuple((*a)->num_vertices(), a) >
+             forward_as_tuple((*b)->num_vertices(), b);
+    }
+  };
+  using PriorityQueue =
+      priority_queue<unique_ptr<S2Polygon>*, vector<unique_ptr<S2Polygon>*>,
+                     NumVerticesGreater>;
   PriorityQueue queue;  // Least vertices is `top`.
   for (size_t i = 0; i < polygons.size(); ++i) {
-    queue.emplace(polygons[i]->num_vertices(), i);
+    queue.push(&polygons[i]);
   }
 
   while (queue.size() > 1) {
     // Pop two simplest polygons from queue.
-    const Pair a = queue.top();
+    unique_ptr<S2Polygon>& a = *queue.top();
     queue.pop();
-    const Pair b = queue.top();
+    unique_ptr<S2Polygon>& b = *queue.top();
     queue.pop();
 
     // Union and add result back to queue.
     auto union_polygon = make_unique<S2Polygon>();
-    union_polygon->InitToUnion(*polygons[a.second], *polygons[b.second],
-                               snap_function);
+    union_polygon->InitToUnion(*a, *b, snap_function);
 
     // Replace `a` with the union, and clear `b` to reclaim memory.
-    polygons[a.second] = std::move(union_polygon);
-    polygons[b.second].reset();
+    a = std::move(union_polygon);
+    b.reset();
 
-    // We assume that the number of vertices in the union polygon is the
-    // sum of the number of vertices in the original polygons, which is not
-    // always true, but will almost always be a decent approximation, and
-    // faster than recomputing.
-    queue.emplace(a.first + b.first, a.second);
+    queue.push(&a);
   }
 
-  return std::move(polygons[queue.top().second]);
+  return std::move(*queue.top());
 }
 
 void S2Polygon::InitToCellUnionBorder(const S2CellUnion& cells) {
@@ -1351,15 +1367,15 @@ void S2Polygon::InitToCellUnionBorder(const S2CellUnion& cells) {
   }
   S2Error error;
   if (!builder.Build(&error)) {
-    S2_LOG(ERROR) << "InitToCellUnionBorder failed: " << error;
+    ABSL_LOG(ERROR) << "InitToCellUnionBorder failed: " << error;
   }
   // If there are no loops, check whether the result should be the full
   // polygon rather than the empty one.  There are only two ways that this can
   // happen: either the cell union is empty, or it consists of all six faces.
   if (num_loops() == 0) {
     if (cells.empty()) return;
-    S2_DCHECK_EQ(uint64{6} << (2 * S2CellId::kMaxLevel),
-              cells.LeafCellsCovered());
+    ABSL_DCHECK_EQ(uint64_t{6} << (2 * S2CellId::kMaxLevel),
+                   cells.LeafCellsCovered());
     Invert();
   }
 }
@@ -1471,13 +1487,13 @@ bool S2Polygon::BoundaryNear(const S2Polygon& b, S1Angle max_error) const {
 void S2Polygon::EncodeCompressed(Encoder* encoder,
                                  const S2XYZFaceSiTi* all_vertices,
                                  int snap_level) const {
-  S2_CHECK_GE(snap_level, 0);
+  ABSL_CHECK_GE(snap_level, 0);
   // Sufficient for what we write. Typically enough for a 4 vertex polygon.
   encoder->Ensure(40);
   encoder->put8(kCurrentCompressedEncodingVersionNumber);
   encoder->put8(snap_level);
   encoder->put_varint32(num_loops());
-  S2_DCHECK_GE(encoder->avail(), 0);
+  ABSL_DCHECK_GE(encoder->avail(), 0);
   const S2XYZFaceSiTi* current_loop_vertices = all_vertices;
   for (int i = 0; i < num_loops(); ++i) {
     loops_[i]->EncodeCompressed(encoder, current_loop_vertices, snap_level);
@@ -1489,15 +1505,15 @@ void S2Polygon::EncodeCompressed(Encoder* encoder,
 }
 
 bool S2Polygon::DecodeCompressed(Decoder* decoder) {
-  if (decoder->avail() < sizeof(uint8)) return false;
+  if (decoder->avail() < sizeof(uint8_t)) return false;
   ClearLoops();
   int snap_level = decoder->get8();
   if (snap_level > S2CellId::kMaxLevel) return false;
   // Polygons with no loops are explicitly allowed here: a newly created
   // polygon has zero loops and such polygons encode and decode properly.
-  uint32 num_loops;
+  uint32_t num_loops;
   if (!decoder->get_varint32(&num_loops)) return false;
-  if (num_loops > static_cast<uint32>(
+  if (num_loops > static_cast<uint32_t>(
                       absl::GetFlag(FLAGS_s2polygon_decode_max_num_loops)))
     return false;
   loops_.reserve(num_loops);
@@ -1507,27 +1523,28 @@ bool S2Polygon::DecodeCompressed(Decoder* decoder) {
     if (!loop->DecodeCompressed(decoder, snap_level)) {
       return false;
     }
-    loops_.push_back(std::move(loop));
+
+    // Ignore any empty loops that were previously encoded.
+    if (!loop->is_empty() && loop->num_vertices() != 0) {
+      loops_.push_back(std::move(loop));
+    }
   }
   InitLoopProperties();
   return true;
 }
 
-S2Polygon::Shape::Shape(const S2Polygon* polygon)
-    : loop_starts_(nullptr) {
-  Init(polygon);
-}
+S2Polygon::Shape::Shape(const S2Polygon* polygon) { Init(polygon); }
 
 void S2Polygon::Shape::Init(const S2Polygon* polygon) {
   polygon_ = polygon;
   loop_starts_ = nullptr;
-  uint32 offset = 0;
+  uint32_t offset = 0;
   if (!polygon->is_full()) {
     const int kMaxLinearSearchLoops = 12;  // From benchmarks.
     int num_loops = polygon->num_loops();
     if (num_loops > kMaxLinearSearchLoops) {
       // Unlike make_unique<>, new T[] does not default-construct each element.
-      loop_starts_.reset(new uint32[num_loops + 1]);  // NOLINT
+      loop_starts_.reset(new uint32_t[num_loops + 1]);  // NOLINT
     }
     for (int i = 0; i < num_loops; ++i) {
       if (loop_starts_) loop_starts_[i] = offset;
@@ -1558,7 +1575,7 @@ int S2Polygon::Shape::num_chains() const {
 }
 
 S2Shape::Chain S2Polygon::Shape::chain(int i) const {
-  S2_DCHECK_LT(i, Shape::num_chains());
+  ABSL_DCHECK_LT(i, Shape::num_chains());
   if (loop_starts_) {
     int start = loop_starts_[i];
     return Chain(start, loop_starts_[i + 1] - start);

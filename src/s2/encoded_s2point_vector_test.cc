@@ -17,31 +17,35 @@
 
 #include "s2/encoded_s2point_vector.h"
 
+#include <atomic>
 #include <cstddef>
-#include <cstdio>
-
-#include <cstring>
-#include <memory>
-#include <string>
+#include <cstdint>
 #include <vector>
 
-#include "s2/base/integral_types.h"
 #include <gtest/gtest.h>
 
 #include "absl/flags/flag.h"
+#include "absl/log/absl_check.h"
+#include "absl/log/log_streamer.h"
+#include "absl/random/random.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_format.h"
 
 #include "s2/base/log_severity.h"
+#include "s2/base/types.h"
 #include "s2/util/bits/bit-interleave.h"
 #include "s2/util/coding/coder.h"
 #include "s2/s2cell_id.h"
 #include "s2/s2coder.h"
 #include "s2/s2coords.h"
+#include "s2/s2fractal.h"
 #include "s2/s2loop.h"
 #include "s2/s2point.h"
 #include "s2/s2polygon.h"
+#include "s2/s2random.h"
 #include "s2/s2testing.h"
 #include "s2/s2text_format.h"
+#include "s2/util/math/matrix3x3.h"
 
 using s2textformat::MakeCellIdOrDie;
 using s2textformat::MakePointOrDie;
@@ -53,7 +57,7 @@ namespace s2coding {
 static int kBlockSize = 16;  // Number of deltas per block in implementation.
 
 size_t TestEncodedS2PointVector(const vector<S2Point>& expected,
-                                CodingHint hint, int64 expected_bytes) {
+                                CodingHint hint, int64_t expected_bytes) {
   Encoder encoder;
   EncodeS2PointVector(expected, hint, &encoder);
   if (expected_bytes >= 0) {
@@ -76,8 +80,8 @@ size_t TestEncodedS2PointVector(const vector<S2Point>& expected,
 // In order to make it easier to construct tests that encode particular
 // values, this function duplicates the part of EncodedS2PointVector that
 // converts an encoded 64-bit value back to an S2Point.
-S2Point EncodedValueToPoint(uint64 value, int level) {
-  uint32 sj, tj;
+S2Point EncodedValueToPoint(uint64_t value, int level) {
+  uint32_t sj, tj;
   util_bits::DeinterleaveUint32(value, &sj, &tj);
   int shift = S2CellId::kMaxLevel - level;
   int si = (((sj << 1) | 1) << shift) & 0x7fffffff;
@@ -174,7 +178,7 @@ TEST(EncodedS2PointVectorTest, NoOverlapOrExtraDeltaBitsNeeded) {
   // encoded using the minimum number delta bits and no overlap.  From the
   // comments there:
   //
-  //   Example 1: d_min = 0x72, d_max = 0x7e.  The range is 0x0c.  This can be
+  //   Example 1: b_min = 0x72, b_max = 0x7e.  The range is 0x0c.  This can be
   //   encoded using delta_bits = 4 and overlap_bits = 0, which allows us to
   //   represent an offset of 0x70 and a maximum delta of 0x0f, so that we can
   //   encode values up to 0x7f.
@@ -198,7 +202,7 @@ TEST(EncodedS2PointVectorTest, NoOverlapOrExtraDeltaBitsNeeded) {
 TEST(EncodedS2PointVectorTest, OverlapNeeded) {
   // Like the above, but tests the following case:
   //
-  //   Example 2: d_min = 0x78, d_max = 0x84.  The range is 0x0c, but in this
+  //   Example 2: b_min = 0x78, b_max = 0x84.  The range is 0x0c, but in this
   //   case it is not sufficient to use delta_bits = 4 and overlap_bits = 0
   //   because we can again only represent an offset of 0x70, so the maximum
   //   delta of 0x0f only lets us encode values up to 0x7f.  However if we
@@ -220,7 +224,7 @@ TEST(EncodedS2PointVectorTest, OverlapNeeded) {
 TEST(EncodedS2PointVectorTest, ExtraDeltaBitsNeeded) {
   // Like the above, but tests the following case:
   //
-  //   Example 3: d_min = 0x08, d_max = 0x104.  The range is 0xfc, so we should
+  //   Example 3: b_min = 0x08, b_max = 0x104.  The range is 0xfc, so we should
   //   be able to use 8-bit deltas.  But even with a 4-bit overlap, we can still
   //   only encode offset = 0 and a maximum value of 0xff.  (We don't allow
   //   bigger overlaps because statistically they are not worthwhile.)  Instead
@@ -321,7 +325,7 @@ TEST(EncodedS2PointVectorTest, MaxFaceSiTiAtAllLevels) {
   // Similar to the test above, but tests encoding the S2CellId at each level
   // whose face, si, and ti values are all maximal.  This turns out to be the
   // S2CellId whose human-readable form is 5/222...22 (0xb555555555555555),
-  // however for clarity we consruct it using S2CellId::FromFaceIJ.
+  // however for clarity we construct it using S2CellId::FromFaceIJ.
   for (int level = 0; level <= S2CellId::kMaxLevel; ++level) {
     SCOPED_TRACE(absl::StrCat("Level = ", level));
     S2CellId id = S2CellId::FromFaceIJ(5, S2::kLimitIJ - 1, S2::kLimitIJ - 1)
@@ -374,14 +378,16 @@ TEST(EncodedS2PointVectorTest, ManyDuplicatePointsAtAllLevels) {
 }
 
 TEST(EncodedS2PointVectorTest, SnappedFractalLoops) {
-  S2Testing::rnd.Reset(absl::GetFlag(FLAGS_s2_random_seed));
-  int kMaxPoints = 3 << (google::DEBUG_MODE ? 10 : 14);
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "SNAPPED_FRACTAL_LOOPS",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
+  int kMaxPoints = 3 << 14;
   for (int num_points = 3; num_points <= kMaxPoints; num_points *= 4) {
     size_t s2polygon_size = 0, lax_polygon_size = 0;
     for (int i = 0; i < 10; ++i) {
-      S2Testing::Fractal fractal;
+      S2Fractal fractal(bitgen);
       fractal.SetLevelForApproxMaxEdges(num_points);
-      auto frame = S2Testing::GetRandomFrame();
+      Matrix3x3_d frame = s2random::Frame(bitgen);
       auto loop = fractal.MakeLoop(frame, S2Testing::KmToAngle(10));
       vector<S2Point> points;
       for (int j = 0; j < loop->num_vertices(); ++j) {
@@ -395,8 +401,8 @@ TEST(EncodedS2PointVectorTest, SnappedFractalLoops) {
       lax_polygon_size +=
           TestEncodedS2PointVector(points, CodingHint::COMPACT, -1) + 2;
     }
-    printf("n=%5d  s2=%9zu  lax=%9zu\n",
-           num_points, s2polygon_size, lax_polygon_size);
+    absl::PrintF("n=%5d  s2=%9zu  lax=%9zu\n", num_points, s2polygon_size,
+                 lax_polygon_size);
   }
 }
 

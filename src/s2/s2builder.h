@@ -22,6 +22,7 @@
 #define S2_S2BUILDER_H_
 
 #include <algorithm>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <utility>
@@ -29,9 +30,10 @@
 
 #include "absl/base/macros.h"
 #include "absl/container/flat_hash_set.h"
+#include "absl/log/absl_check.h"
+#include "absl/log/absl_log.h"
 
-#include "s2/base/integral_types.h"
-#include "s2/_fp_contract_off.h"
+#include "s2/_fp_contract_off.h"  // IWYU pragma: keep
 #include "s2/id_set_lexicon.h"
 #include "s2/mutable_s2shape_index.h"
 #include "s2/s1angle.h"
@@ -139,7 +141,7 @@ class S2Polyline;
 //  builder.AddPolygon(input);
 //  S2Error error;
 //  if (!builder.Build(&error)) {
-//    S2_LOG(ERROR) << error;
+//    ABSL_LOG(ERROR) << error;
 //    ...
 //  }
 class S2Builder {
@@ -166,7 +168,7 @@ class S2Builder {
   // holes, the outer loops ("shells") should be directed counter-clockwise
   // while the inner loops ("holes") should be directed clockwise.  Note that
   // S2Builder::AddPolygon() follows this convention automatically.
-  enum class EdgeType : uint8 { DIRECTED, UNDIRECTED };
+  enum class EdgeType : uint8_t { DIRECTED, UNDIRECTED };
 
   // A SnapFunction restricts the locations of the output vertices.  For
   // example, there are predefined snap functions that require vertices to be
@@ -453,7 +455,7 @@ class S2Builder {
     //   S2Error error;
     //   if (!builder.Build(&error)) {
     //     if (error.code() == S2Error::RESOURCE_EXHAUSTED) {
-    //       S2_LOG(ERROR) << error;  // Memory limit exceeded
+    //       ABSL_LOG(ERROR) << error;  // Memory limit exceeded
     //     }
     //   }
     //
@@ -545,7 +547,7 @@ class S2Builder {
   // builder.StartLayer(make_unique<s2builderutil::S2PolylineLayer>(&line2)));
   // ... Add edges using builder.AddEdge(), etc ...
   // S2Error error;
-  // S2_CHECK(builder.Build(&error)) << error;  // Builds "line1" & "line2"
+  // ABSL_CHECK(builder.Build(&error)) << error;  // Builds "line1" & "line2"
   class Layer;
 
   void StartLayer(std::unique_ptr<Layer> layer);
@@ -686,7 +688,7 @@ class S2Builder {
   // to add and remove labels hierarchically (e.g., polygon 5, loop 2).  Use
   // set_label() and clear_labels() if you need at most one label per edge.
   //
-  using Label = int32;
+  using Label = int32_t;
 
   // Clear the stack of labels.
   void clear_labels();
@@ -734,16 +736,16 @@ class S2Builder {
   // All types associated with the S2Builder inputs are prefixed with "Input".
 
   // Identifies an input vertex.
-  using InputVertexId = int32;
+  using InputVertexId = int32_t;
 
   // Defines an input edge.
   using InputEdge = std::pair<InputVertexId, InputVertexId>;
 
   // Identifies an input edge.
-  using InputEdgeId = int32;
+  using InputEdgeId = int32_t;
 
   // Identifies the set of input edge ids that were snapped to a given edge.
-  using InputEdgeIdSetId = int32;
+  using InputEdgeIdSetId = int32_t;
 
   // Sort key for prioritizing input vertices.  (Note that keys are *not*
   // compared using std::less; see SortInputVertices for details.)
@@ -756,13 +758,13 @@ class S2Builder {
   // than SiteId is the same as Graph::VertexId, but if there are many layers
   // then each Graph may contain only a subset of the sites.  Also see
   // GraphOptions::allow_vertex_filtering().
-  using SiteId = int32;
+  using SiteId = int32_t;
 
   // Defines an output edge.
   using Edge = std::pair<SiteId, SiteId>;
 
   // Identifies an output edge.
-  using EdgeId = int32;
+  using EdgeId = int32_t;
 
   // Identifies an output edge in a particular layer.
   using LayerEdgeId = std::pair<int, EdgeId>;
@@ -810,13 +812,13 @@ class S2Builder {
 
    private:
     // The amount of non-inline memory used to store edge sites.
-    int64 edge_sites_bytes_ = 0;
+    int64_t edge_sites_bytes_ = 0;
 
     // The amount of memory used by the S2PointIndex for sites.
-    int64 site_index_bytes_ = 0;
+    int64_t site_index_bytes_ = 0;
 
     // The amount of temporary memory used by Graph::FilterVertices().
-    int64 filter_vertices_bytes_ = 0;
+    int64_t filter_vertices_bytes_ = 0;
   };
 
   InputVertexId AddVertex(const S2Point& v);
@@ -944,10 +946,10 @@ class S2Builder {
   std::vector<InputEdgeId> layer_begins_;
   std::vector<IsFullPolygonPredicate> layer_is_full_polygon_predicates_;
 
-  // Each input edge has "label set id" (an int32) representing the set of
+  // Each input edge has "label set id" (an int32_t) representing the set of
   // labels attached to that edge.  This vector is populated only if at least
   // one label is used.
-  using LabelSetId = int32;
+  using LabelSetId = int32_t;
   std::vector<LabelSetId> label_set_ids_;
   IdSetLexicon label_set_lexicon_;
 
@@ -996,9 +998,9 @@ class S2Builder {
 class S2Builder::GraphOptions {
  public:
   using EdgeType = S2Builder::EdgeType;
-  enum class DegenerateEdges : uint8;
-  enum class DuplicateEdges : uint8;
-  enum class SiblingPairs : uint8;
+  enum class DegenerateEdges : uint8_t;
+  enum class DuplicateEdges : uint8_t;
+  enum class SiblingPairs : uint8_t;
 
   // All S2Builder::Layer subtypes should specify GraphOptions explicitly
   // using this constructor, rather than relying on default values.
@@ -1055,7 +1057,7 @@ class S2Builder::GraphOptions {
   //       for algorithms that require an output edge for every input edge.
   //
   // DEFAULT: DegenerateEdges::KEEP
-  enum class DegenerateEdges : uint8 { DISCARD, DISCARD_EXCESS, KEEP };
+  enum class DegenerateEdges : uint8_t { DISCARD, DISCARD_EXCESS, KEEP };
   DegenerateEdges degenerate_edges() const;
   void set_degenerate_edges(DegenerateEdges degenerate_edges);
 
@@ -1066,7 +1068,7 @@ class S2Builder::GraphOptions {
   // input edge ids.
   //
   // DEFAULT: DuplicateEdges::KEEP
-  enum class DuplicateEdges : uint8 { MERGE, KEEP };
+  enum class DuplicateEdges : uint8_t { MERGE, KEEP };
   DuplicateEdges duplicate_edges() const;
   void set_duplicate_edges(DuplicateEdges duplicate_edges);
 
@@ -1131,8 +1133,12 @@ class S2Builder::GraphOptions {
   // happen even with duplicate degenerate edges (e.g. the edges EE7, EE8).
   //
   // DEFAULT: SiblingPairs::KEEP
-  enum class SiblingPairs : uint8 {
-    DISCARD, DISCARD_EXCESS, KEEP, REQUIRE, CREATE
+  enum class SiblingPairs : uint8_t {
+    DISCARD,
+    DISCARD_EXCESS,
+    KEEP,
+    REQUIRE,
+    CREATE
   };
   SiblingPairs sibling_pairs() const;
   void set_sibling_pairs(SiblingPairs sibling_pairs);
@@ -1209,7 +1215,7 @@ inline S1Angle S2Builder::Options::intersection_tolerance() const {
 
 inline void S2Builder::Options::set_intersection_tolerance(
     S1Angle intersection_tolerance) {
-  S2_DCHECK_GE(intersection_tolerance, S1Angle::Zero());
+  ABSL_DCHECK_GE(intersection_tolerance, S1Angle::Zero());
   intersection_tolerance_ = intersection_tolerance;
 }
 

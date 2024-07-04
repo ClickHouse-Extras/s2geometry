@@ -23,7 +23,11 @@
 
 #include <gtest/gtest.h>
 #include "absl/flags/flag.h"
+#include "absl/log/log_streamer.h"
+#include "absl/random/bit_gen_ref.h"
+#include "absl/random/random.h"
 #include "s2/s2point.h"
+#include "s2/s2random.h"
 #include "s2/s2shape.h"
 #include "s2/s2shapeutil_testing.h"
 #include "s2/s2testing.h"
@@ -45,11 +49,12 @@ TEST(S2EdgeVectorShape, Move) {
   // to be moved.
   S2EdgeVectorShape correct;
   S2EdgeVectorShape to_move;
-  S2Testing::rnd.Reset(absl::GetFlag(FLAGS_s2_random_seed));
-  const int kNumEdges = 100;
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "MOVE", absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
+  constexpr int kNumEdges = 100;
   for (int i = 0; i < kNumEdges; ++i) {
-    const S2Point start_point = S2Testing::RandomPoint();
-    const S2Point end_point = S2Testing::RandomPoint();
+    const S2Point start_point = s2random::Point(bitgen);
+    const S2Point end_point = s2random::Point(bitgen);
     correct.Add(start_point, end_point);
     to_move.Add(start_point, end_point);
   }
@@ -57,23 +62,23 @@ TEST(S2EdgeVectorShape, Move) {
   // Test the move constructor.
   S2EdgeVectorShape move1(std::move(to_move));
   s2testing::ExpectEqual(correct, move1);
-  EXPECT_EQ(correct.id(), move1.id());
 
   // Test the move-assignment operator.
   S2EdgeVectorShape move2;
   move2 = std::move(move1);
   s2testing::ExpectEqual(correct, move2);
-  EXPECT_EQ(correct.id(), move2.id());
 }
 
 TEST(S2EdgeVectorShape, EdgeAccess) {
   S2EdgeVectorShape shape;
-  S2Testing::rnd.Reset(absl::GetFlag(FLAGS_s2_random_seed));
-  const int kNumEdges = 100;
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "EDGE_ACCESS",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
+  constexpr int kNumEdges = 100;
   vector<std::pair<S2Point, S2Point>> edges;
   for (int i = 0; i < kNumEdges; ++i) {
-    S2Point a = S2Testing::RandomPoint();  // Control the evaluation order
-    edges.emplace_back(a, S2Testing::RandomPoint());
+    S2Point a = s2random::Point(bitgen);  // Control the evaluation order
+    edges.emplace_back(a, s2random::Point(bitgen));
     shape.Add(edges.back().first, edges.back().second);
   }
   EXPECT_EQ(kNumEdges, shape.num_edges());

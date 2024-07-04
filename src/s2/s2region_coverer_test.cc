@@ -21,7 +21,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
+#include <cstdint>
 #include <limits>
 #include <queue>
 #include <string>
@@ -31,14 +31,17 @@
 #include <gtest/gtest.h>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/flags/flag.h"
+#include "absl/log/absl_check.h"
+#include "absl/log/log_streamer.h"
+#include "absl/random/random.h"
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_split.h"
 
 #include "s2/base/commandlineflags.h"
-#include "s2/base/integral_types.h"
-#include "s2/base/logging.h"
 #include "s2/base/log_severity.h"
+#include "s2/base/types.h"
 #include "s2/s1angle.h"
 #include "s2/s1chord_angle.h"
 #include "s2/s2cap.h"
@@ -48,22 +51,15 @@
 #include "s2/s2latlng.h"
 #include "s2/s2point.h"
 #include "s2/s2polyline.h"
+#include "s2/s2random.h"
 #include "s2/s2region.h"
 #include "s2/s2testing.h"
-
-using absl::StrCat;
-using std::max;
-using std::min;
-using std::priority_queue;
-using std::string;
-using std::unordered_map;
-using std::vector;
 
 S2_DEFINE_string(max_cells, "4,8",
               "Comma-separated list of values to use for 'max_cells'");
 
-S2_DEFINE_int32(iters, google::DEBUG_MODE ? 1000 : 100000,
-             "Number of random caps to try for each max_cells value");
+S2_DEFINE_int32(iters, S2_DEBUG_MODE ? 1000 : 100000,
+                "Number of random caps to try for each max_cells value");
 
 namespace {
 
@@ -76,13 +72,17 @@ using std::string;
 using std::vector;
 
 TEST(S2RegionCoverer, RandomCells) {
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "RANDOM_CELLS",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
+
   S2RegionCoverer::Options options;
   options.set_max_cells(1);
   S2RegionCoverer coverer(options);
 
   // Test random cell ids at all levels.
   for (int i = 0; i < 10000; ++i) {
-    S2CellId id = S2Testing::GetRandomCellId();
+    S2CellId id = s2random::CellId(bitgen);
     SCOPED_TRACE(StrCat("Iteration ", i, ", cell ID token ", id.ToToken()));
     vector<S2CellId> covering = coverer.GetCovering(S2Cell(id)).Release();
     EXPECT_EQ(1, covering.size());
@@ -124,19 +124,22 @@ static void CheckCovering(const S2RegionCoverer::Options& options,
 }
 
 TEST(S2RegionCoverer, RandomCaps) {
-  static const int kMaxLevel = S2CellId::kMaxLevel;
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "RANDOM_CAPS",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
+  static constexpr int kMaxLevel = S2CellId::kMaxLevel;
   S2RegionCoverer::Options options;
   for (int i = 0; i < 1000; ++i) {
-    do {
-      options.set_min_level(S2Testing::rnd.Uniform(kMaxLevel + 1));
-      options.set_max_level(S2Testing::rnd.Uniform(kMaxLevel + 1));
-    } while (options.min_level() > options.max_level());
-    options.set_max_cells(S2Testing::rnd.Skewed(10));
-    options.set_level_mod(1 + S2Testing::rnd.Uniform(3));
+    options.set_min_level(
+        absl::Uniform(absl::IntervalClosedClosed, bitgen, 0, kMaxLevel));
+    options.set_max_level(absl::Uniform(absl::IntervalClosedClosed, bitgen,
+                                        options.min_level(), kMaxLevel));
+    options.set_max_cells(s2random::SkewedInt(bitgen, 10));
+    options.set_level_mod(absl::Uniform(bitgen, 1, 4));
     double max_area =  min(4 * M_PI, (3 * options.max_cells() + 1) *
                            S2Cell::AverageArea(options.min_level()));
-    S2Cap cap = S2Testing::GetRandomCap(0.1 * S2Cell::AverageArea(kMaxLevel),
-                                        max_area);
+    S2Cap cap =
+        s2random::Cap(bitgen, 0.1 * S2Cell::AverageArea(kMaxLevel), max_area);
     S2RegionCoverer coverer(options);
     vector<S2CellId> covering, interior;
     coverer.GetCovering(cap, &covering);
@@ -161,16 +164,19 @@ TEST(S2RegionCoverer, RandomCaps) {
 }
 
 TEST(S2RegionCoverer, SimpleCoverings) {
-  static const int kMaxLevel = S2CellId::kMaxLevel;
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "SIMPLE_COVERINGS",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
+  static constexpr int kMaxLevel = S2CellId::kMaxLevel;
   S2RegionCoverer::Options options;
-  options.set_max_cells(std::numeric_limits<int32>::max());
+  options.set_max_cells(std::numeric_limits<int32_t>::max());
   for (int i = 0; i < 1000; ++i) {
-    int level = S2Testing::rnd.Uniform(kMaxLevel + 1);
+    int level = absl::Uniform(bitgen, 0, kMaxLevel + 1);
     options.set_min_level(level);
     options.set_max_level(level);
     double max_area =  min(4 * M_PI, 1000 * S2Cell::AverageArea(level));
-    S2Cap cap = S2Testing::GetRandomCap(0.1 * S2Cell::AverageArea(kMaxLevel),
-                                        max_area);
+    S2Cap cap =
+        s2random::Cap(bitgen, 0.1 * S2Cell::AverageArea(kMaxLevel), max_area);
     vector<S2CellId> covering;
     S2RegionCoverer::GetSimpleCovering(cap, cap.center(), level, &covering);
     CheckCovering(options, cap, covering, false);
@@ -189,8 +195,11 @@ struct WorstCap {
 
 static void TestAccuracy(int max_cells) {
   SCOPED_TRACE(StrCat(max_cells, " cells"));
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "TEST_ACCURACY",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
 
-  static const int kNumMethods = 1;
+  static constexpr int kNumMethods = 1;
   // This code is designed to evaluate several approximation algorithms and
   // figure out which one works better.  The way to do this is to hack the
   // S2RegionCoverer interface to add a global variable to control which
@@ -209,7 +218,7 @@ static void TestAccuracy(int max_cells) {
   int cell_total[kNumMethods] = {0};
   int area_winner_tally[kNumMethods] = {0};
   int cell_winner_tally[kNumMethods] = {0};
-  static const int kMaxWorstCaps = 10;
+  static constexpr int kMaxWorstCaps = 10;
   priority_queue<WorstCap> worst_caps[kNumMethods];
 
   for (int method = 0; method < kNumMethods; ++method) {
@@ -222,7 +231,7 @@ static void TestAccuracy(int max_cells) {
     const double min_cap_area = S2Cell::AverageArea(S2CellId::kMaxLevel)
                                 * max_cells * max_cells;
     // Coverings for huge caps are not interesting, so limit the max area too.
-    S2Cap cap = S2Testing::GetRandomCap(min_cap_area, 0.1 * M_PI);
+    S2Cap cap = s2random::Cap(bitgen, min_cap_area, 0.1 * M_PI);
     double cap_area = cap.GetArea();
 
     double min_area = 1e30;
@@ -263,34 +272,34 @@ static void TestAccuracy(int max_cells) {
     }
   }
   for (int method = 0; method < kNumMethods; ++method) {
-    printf("\nMax cells %d, method %d:\n", max_cells, method);
-    printf(
+    absl::PrintF("\nMax cells %d, method %d:\n", max_cells, method);
+    absl::PrintF(
         "  Average cells: %.4f\n",
         cell_total[method] / static_cast<double>(absl::GetFlag(FLAGS_iters)));
-    printf("  Average area ratio: %.4f\n",
-           ratio_total[method] / absl::GetFlag(FLAGS_iters));
+    absl::PrintF("  Average area ratio: %.4f\n",
+                 ratio_total[method] / absl::GetFlag(FLAGS_iters));
     vector<double>& mratios = ratios[method];
     std::sort(mratios.begin(), mratios.end());
-    printf("  Median ratio: %.4f\n", mratios[mratios.size() / 2]);
-    printf("  Max ratio: %.4f\n", max_ratio[method]);
-    printf("  Min ratio: %.4f\n", min_ratio[method]);
+    absl::PrintF("  Median ratio: %.4f\n", mratios[mratios.size() / 2]);
+    absl::PrintF("  Max ratio: %.4f\n", max_ratio[method]);
+    absl::PrintF("  Min ratio: %.4f\n", min_ratio[method]);
     if (kNumMethods > 1) {
-      printf("  Cell winner probability: %.4f\n",
-             cell_winner_tally[method] /
-                 static_cast<double>(absl::GetFlag(FLAGS_iters)));
-      printf("  Area winner probability: %.4f\n",
-             area_winner_tally[method] /
-                 static_cast<double>(absl::GetFlag(FLAGS_iters)));
+      absl::PrintF("  Cell winner probability: %.4f\n",
+                   cell_winner_tally[method] /
+                       static_cast<double>(absl::GetFlag(FLAGS_iters)));
+      absl::PrintF("  Area winner probability: %.4f\n",
+                   area_winner_tally[method] /
+                       static_cast<double>(absl::GetFlag(FLAGS_iters)));
     }
-    printf("  Caps with the worst approximation ratios:\n");
+    absl::PrintF("  Caps with the worst approximation ratios:\n");
     for (; !worst_caps[method].empty(); worst_caps[method].pop()) {
       const WorstCap& w = worst_caps[method].top();
       S2LatLng ll(w.cap.center());
-      printf("    Ratio %.4f, Cells %d, "
-             "Center (%.8f, %.8f), Km %.6f\n",
-             w.ratio, w.num_cells,
-             ll.lat().degrees(), ll.lng().degrees(),
-             w.cap.GetRadius().radians() * 6367.0);
+      absl::PrintF(
+          "    Ratio %.4f, Cells %d, "
+          "Center (%.8f, %.8f), Km %.6f\n",
+          w.ratio, w.num_cells, ll.lat().degrees(), ll.lng().degrees(),
+          w.cap.GetRadius().radians() * 6367.0);
     }
   }
 }
@@ -299,7 +308,7 @@ TEST(S2RegionCoverer, Accuracy) {
   for (auto max_cells_str :
        absl::StrSplit(absl::GetFlag(FLAGS_max_cells), ',', absl::SkipEmpty())) {
     int max_cells;
-    S2_CHECK(absl::SimpleAtoi(max_cells_str, &max_cells));
+    ABSL_CHECK(absl::SimpleAtoi(max_cells_str, &max_cells));
     TestAccuracy(max_cells);
   }
 }
@@ -312,9 +321,11 @@ TEST(S2RegionCoverer, InteriorCovering) {
   //   max_cells = 3
   // the best interior covering should contain 3 children of the initial cell,
   // that were not effected by removal of a grandchild.
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "INTERIOR_COVERING",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
   const int level = 12;
-  S2CellId small_cell =
-      S2CellId(S2Testing::RandomPoint()).parent(level + 2);
+  S2CellId small_cell = S2CellId(s2random::Point(bitgen)).parent(level + 2);
   S2CellId large_cell = small_cell.parent(level);
   S2CellUnion diff =
       S2CellUnion({large_cell}).Difference(S2CellUnion({small_cell}));

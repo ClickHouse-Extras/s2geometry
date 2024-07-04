@@ -28,6 +28,11 @@
 
 #include "absl/flags/reflection.h"
 #include "absl/flags/flag.h"
+#include "absl/log/absl_check.h"
+#include "absl/log/absl_log.h"
+#include "absl/log/log_streamer.h"
+#include "absl/random/bit_gen_ref.h"
+#include "absl/random/random.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_split.h"
@@ -56,6 +61,7 @@
 #include "s2/s2pointutil.h"
 #include "s2/s2polygon.h"
 #include "s2/s2polyline.h"
+#include "s2/s2random.h"
 #include "s2/s2shape.h"
 #include "s2/s2shape_index.h"
 #include "s2/s2shapeutil_contains_brute_force.h"
@@ -69,6 +75,7 @@ namespace {
 
 using absl::ByAnyChar;
 using absl::SkipEmpty;
+using absl::StrCat;
 using absl::StrContains;
 using absl::string_view;
 using absl::StrSplit;
@@ -125,9 +132,8 @@ void ExpectResult(S2BooleanOperation::OpType op_type,
 }
 
 void ExpectResult(S2BooleanOperation::OpType op_type,
-                  const S2BooleanOperation::Options& options,
-                  const string& a_str, const string& b_str,
-                  const string& expected_str) {
+                  const S2BooleanOperation::Options& options, string_view a_str,
+                  string_view b_str, string_view expected_str) {
   auto a = s2textformat::MakeIndexOrDie(a_str);
   auto b = s2textformat::MakeIndexOrDie(b_str);
   auto expected = s2textformat::MakeIndexOrDie(expected_str);
@@ -142,6 +148,13 @@ static S2BooleanOperation::Options RoundToE(int exp) {
   S2BooleanOperation::Options options;
   options.set_snap_function(s2builderutil::IntLatLngSnapFunction(exp));
   return options;
+}
+
+TEST(S2BooleanOperation, OpTypeAccessor) {
+  vector<unique_ptr<S2Builder::Layer>> layers;
+  const S2BooleanOperation::Options options;
+  S2BooleanOperation op(OpType::UNION, std::move(layers), options);
+  EXPECT_EQ(OpType::UNION, op.op_type());
 }
 
 // TODO(ericv): Clean up or remove these notes.
@@ -217,7 +230,7 @@ TEST(S2BooleanOperation, PointPoint) {
   auto a = "0:0 | 1:0 # #";
   auto b = "0:0 | 2:0 # #";
   // Note that these results have duplicates, which is correct.  Clients can
-  // eliminated the duplicates with the appropriate GraphOptions.
+  // eliminate the duplicates with the appropriate GraphOptions.
   ExpectResult(OpType::UNION, options, a, b,
                "0:0 | 0:0 | 1:0 | 2:0 # #");
   ExpectResult(OpType::INTERSECTION, options, a, b,
@@ -860,7 +873,7 @@ TEST(S2BooleanOperation, PolylineEdgeIsolatedStartVertexPlusInteriorCrossing) {
   // in order for GraphEdgeClipper to be able to do its work properly.  The
   // test is constructed such that if the crossings are incorrectly associated
   // with the degenerate edge XX then not only will the output be incorrect,
-  // it will also trigger an internal S2_DCHECK.
+  // it will also trigger an internal ABSL_DCHECK.
   S2BooleanOperation::Options options = RoundToE(1);
   auto a = "# 0:0, 0:10, 0:4 # ";
   auto b = "# # 0:0, -5:5, 5:5";
@@ -874,7 +887,7 @@ TEST(S2BooleanOperation, PolygonEdgeIsolatedStartVertexPlusInteriorCrossing) {
   // intersection with a clockwise loop rather than subtracting a CCW loop.
   // The test is constructed such that if the crossings for the edge 0:0, 0:8
   // are incorrectly associated with the degenerate edge 0:0, then not only
-  // will the output be incorrect, it will also trigger an internal S2_DCHECK.
+  // will the output be incorrect, it will also trigger an internal ABSL_DCHECK.
   S2BooleanOperation::Options options = RoundToE(1);
   options.set_polygon_model(PolygonModel::CLOSED);
   auto a = "# # 0:0, 5:5, -5:5";
@@ -1135,7 +1148,7 @@ class DegeneracyCoverageTest : public ::testing::Test {
 
 void DegeneracyCoverageTest::Run(OpType op_type, PolygonModel polygon_model,
                                  const vector<string>& rules) {
-  S2_CHECK_EQ(rules.size(), kInputChars.size());
+  ABSL_CHECK_EQ(rules.size(), kInputChars.size());
 
   // For the symmetric operators (i.e., all except difference) we only need to
   // define half of the expected results.
@@ -1164,11 +1177,11 @@ void DegeneracyCoverageTest::Run(OpType op_type, PolygonModel polygon_model,
     char ch0 = kInputChars[i];
     vector<string_view> row = StrSplit(rules[i], ' ', SkipEmpty());
     // Verify and remove the row label.
-    S2_CHECK_EQ(row[0], string{ch0});
-    S2_CHECK_EQ(row[1], "|");
+    ABSL_CHECK_EQ(row[0], string{ch0});
+    ABSL_CHECK_EQ(row[1], "|");
     row.erase(row.begin(), row.begin() + 2);
     const int limit = symmetric ? (i + 1) : kInputChars.size();
-    S2_CHECK_EQ(row.size(), limit);
+    ABSL_CHECK_EQ(row.size(), limit);
     for (int j = 0; j < limit; ++j) {
       char ch1 = kInputChars[j];
       // Only iterate over polyline models if at least one input is a polyline.
@@ -1187,7 +1200,7 @@ void DegeneracyCoverageTest::Run(OpType op_type, PolygonModel polygon_model,
                                                  SkipEmpty());
           string_view result = choices[0];
           if (choices.size() > 1) {
-            S2_CHECK_EQ(choices.size(), 2);
+            ABSL_CHECK_EQ(choices.size(), 2);
             // Test whether each input contains the point A.  Note that we
             // can't use S2ContainsPointQuery because the containment test
             // must be done using the given S2BooleanOperation options.
@@ -1206,8 +1219,8 @@ void DegeneracyCoverageTest::Run(OpType op_type, PolygonModel polygon_model,
           // Next process any '|' operators in the result.
           choices = StrSplit(result, '|');
           if (choices.size() > 1) {
-            S2_CHECK_EQ(num_line_models, 3) << "No polylines present";
-            S2_CHECK_EQ(choices.size(), 3);
+            ABSL_CHECK_EQ(num_line_models, 3) << "No polylines present";
+            ABSL_CHECK_EQ(choices.size(), 3);
             result = choices[k];
           }
           TestResult(op_type, options, ch0, ch1, result);
@@ -1267,13 +1280,13 @@ unique_ptr<MutableS2ShapeIndex> DegeneracyCoverageTest::MakeIndex(
     } else if (ch == 'U') {  // Upwards polygon edge
       int i = index->Add(make_unique<S2LaxPolygonShape>(Loops{{a, b, -c}}));
       // Some test results require that the U polygon contains A but not B.
-      S2_CHECK(ContainsBruteForce(*index->shape(i), a));
-      S2_CHECK(!ContainsBruteForce(*index->shape(i), b));
+      ABSL_CHECK(ContainsBruteForce(*index->shape(i), a));
+      ABSL_CHECK(!ContainsBruteForce(*index->shape(i), b));
     } else if (ch == 'D') {  // Downwards polygon edge
       int i = index->Add(make_unique<S2LaxPolygonShape>(Loops{{b, a, c}}));
       // Some test cases require that the D polygon excludes both A and B.
-      S2_CHECK(!ContainsBruteForce(*index->shape(i), a));
-      S2_CHECK(!ContainsBruteForce(*index->shape(i), b));
+      ABSL_CHECK(!ContainsBruteForce(*index->shape(i), a));
+      ABSL_CHECK(!ContainsBruteForce(*index->shape(i), b));
     } else if (ch == '~') {  // Complement of following region (U or D)
       ch = chars[++i];
       if (ch == 'U') {
@@ -1281,7 +1294,8 @@ unique_ptr<MutableS2ShapeIndex> DegeneracyCoverageTest::MakeIndex(
       } else if (ch == 'D') {
         index->Add(make_unique<S2LaxPolygonShape>(Loops{{c, a, b}}));
       } else {
-        S2_LOG(FATAL) << "Unsupported character for ~ operator: " << string{ch};
+        ABSL_LOG(FATAL) << "Unsupported character for ~ operator: "
+                        << string{ch};
       }
     } else if (ch == 'Q') {  // Union of 'U' and 'D' shapes
       index->Add(make_unique<S2LaxPolygonShape>(Loops{{a, c, b, -c}}));
@@ -1292,7 +1306,7 @@ unique_ptr<MutableS2ShapeIndex> DegeneracyCoverageTest::MakeIndex(
     } else if (ch == '*') {  // Full sphere
       index->Add(make_unique<S2LaxPolygonShape>(Loops{{}}));
     } else {
-      S2_LOG(FATAL) << "Unknown degeneracy coverage symbol: " << string{ch};
+      ABSL_LOG(FATAL) << "Unknown degeneracy coverage symbol: " << string{ch};
     }
   }
   return index;
@@ -1384,7 +1398,7 @@ TEST_F(DegeneracyCoverageTest, SemiOpenUnion) {
   // This differs from most of the other tests, which encode the results
   // conditionally using the '<' and '>' operators.  That was not practical in
   // this case because (1) no conditional operators are defined for the 'B'
-  // vertex and (2) encoding the full set of possibilites for all 12 cases
+  // vertex and (2) encoding the full set of possibilities for all 12 cases
   // (i.e., the 3 polyline models and whether U contains A and/or B) would be
   // unwieldy.
   const vector<string> rules = {
@@ -1726,7 +1740,7 @@ void TestMeridianSplitting(string_view input_str, string_view expected_str) {
   EXPECT_EQ(expected_str, s2textformat::ToString(output));
 }
 
-// This test demonstrated that S2 geometry can easily be transformed such that
+// This test demonstrates that S2 geometry can easily be transformed such that
 // no edge crosses the 180 degree meridian, as required by formats such as
 // GeoJSON, by simply subtracting a degenerate loop that follows the 180 degree
 // meridian.  This not only splits polylines along the meridian, it also inserts
@@ -1873,7 +1887,7 @@ TEST(S2BooleanOperation, GetCrossedVertexIndexBug2) {
 }
 
 TEST(S2BooleanOperation, GetCrossedVertexIndexBug3) {
-  // This test exercise the special case in GetCrossedVertexIndex() that
+  // This test exercises the special case in GetCrossedVertexIndex() that
   // requires checking the orientation of a loop.  This is done by adding up the
   // turning angles at each vertex, which in turn involves computing the edge
   // normals and measuring the angles between them.  However in this test, some
@@ -2066,10 +2080,10 @@ TEST(S2BooleanOperation, GetCrossedVertexIndexBug6) {
 
 // Performs the given operation and compares the result to "expected_str".  All
 // arguments are in s2textformat::MakeLaxPolygonOrDie() format.
-void ExpectPolygon(S2BooleanOperation::OpType op_type, const string& a_str,
-                   const string& b_str, const string& expected_str) {
-  auto a = s2textformat::MakeIndexOrDie(string("# # ") + a_str);
-  auto b = s2textformat::MakeIndexOrDie(string("# # ") + b_str);
+void ExpectPolygon(S2BooleanOperation::OpType op_type, string_view a_str,
+                   string_view b_str, string_view expected_str) {
+  auto a = s2textformat::MakeIndexOrDie(StrCat("# # ", a_str));
+  auto b = s2textformat::MakeIndexOrDie(StrCat("# # ", b_str));
   s2builderutil::LaxPolygonLayer::Options polygon_options;
   polygon_options.set_degenerate_boundaries(DegenerateBoundaries::DISCARD);
   S2LaxPolygonShape output;
@@ -2286,6 +2300,49 @@ TEST(S2BooleanOperation, IntersectsEmptyAndFull) {
   EXPECT_FALSE(S2BooleanOperation::Intersects(*empty, *full));
   EXPECT_FALSE(S2BooleanOperation::Intersects(*full, *empty));
   EXPECT_TRUE(S2BooleanOperation::Intersects(*full, *full));
+}
+
+TEST(S2BooleanOperation, OptionsFieldsCopied) {
+  S2BooleanOperation::Options options;
+
+  // Just test one field.
+  options.set_polyline_loops_have_boundaries(false);
+  S2BooleanOperation no_boundary_op(S2BooleanOperation::OpType::UNION,
+                                    vector<unique_ptr<S2Builder::Layer>>(),
+                                    options);
+  EXPECT_FALSE(no_boundary_op.options().polyline_loops_have_boundaries());
+
+  options.set_polyline_loops_have_boundaries(true);
+  S2BooleanOperation boundary_op(S2BooleanOperation::OpType::UNION,
+                                 vector<unique_ptr<S2Builder::Layer>>(),
+                                 options);
+  EXPECT_TRUE(boundary_op.options().polyline_loops_have_boundaries());
+}
+
+TEST(S2BooleanOperationSourceIdTest, Accessors) {
+  // region_id may only be 0 or 1.
+  S2BooleanOperation::SourceId id(/*region_id=*/1, /*shape_id=*/2,
+                                  /*edge_id=*/3);
+  EXPECT_EQ(1, id.region_id());
+  EXPECT_EQ(2, id.shape_id());
+  EXPECT_EQ(3, id.edge_id());
+}
+
+TEST(S2BooleanOperationSourceIdTest, Equality) {
+  using Id = S2BooleanOperation::SourceId;
+  EXPECT_EQ(Id(1, 2, 3), Id(1, 2, 3));
+  // `operator!=` is not defined, so use `==` instead of `EXPECT_NE`.
+  EXPECT_FALSE(Id(1, 2, 3) == Id(0, 2, 3));
+  EXPECT_FALSE(Id(1, 2, 3) == Id(1, 0, 3));
+  EXPECT_FALSE(Id(1, 2, 3) == Id(1, 2, 0));
+}
+
+TEST(S2BooleanOperationSourceIdTest, LessThan) {
+  using Id = S2BooleanOperation::SourceId;
+  EXPECT_FALSE(Id(1, 2, 3) < Id(1, 2, 3));
+  EXPECT_LT(Id(0, 2, 3), Id(1, 2, 3));
+  EXPECT_LT(Id(1, 2, 3), Id(1, 20, 3));
+  EXPECT_LT(Id(1, 2, 3), Id(1, 2, 30));
 }
 
 }  // namespace

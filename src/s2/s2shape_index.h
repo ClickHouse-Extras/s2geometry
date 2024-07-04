@@ -41,26 +41,20 @@
 #define S2_S2SHAPE_INDEX_H_
 
 #include <array>
-#include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <iterator>
 #include <memory>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
-#include "absl/base/macros.h"
-#include "absl/base/thread_annotations.h"
-#include "absl/synchronization/mutex.h"
+#include "absl/log/absl_check.h"
+#include "absl/types/span.h"
 
-#include "s2/base/integral_types.h"
-#include "s2/base/logging.h"
-#include "s2/base/spinlock.h"
-#include "s2/_fp_contract_off.h"
+#include "s2/_fp_contract_off.h"  // IWYU pragma: keep
 #include "s2/s2cell_id.h"
 #include "s2/s2cell_iterator.h"
 #include "s2/s2point.h"
-#include "s2/s2pointutil.h"
 #include "s2/s2shape.h"
 #include "s2/util/coding/coder.h"
 #include "s2/util/gtl/compact_array.h"
@@ -108,7 +102,7 @@ class S2ClippedShape {
   friend class S2Stats;
 
   // Internal methods are documented with their definition.
-  void Init(int32 shape_id, int32 num_edges);
+  void Init(int32_t shape_id, int32_t num_edges);
   void Destruct();
   bool is_inline() const;
   void set_contains_center(bool contains_center);
@@ -117,9 +111,11 @@ class S2ClippedShape {
   // All fields are packed into 16 bytes (assuming 64-bit pointers).  Up to
   // two edge ids are stored inline; this is an important optimization for
   // clients that use S2Shapes consisting of a single edge.
-  int32 shape_id_;
-  uint32 contains_center_ : 1;  // shape contains the cell center
-  uint32 num_edges_ : 31;
+  int32_t shape_id_;
+  uint32_t contains_center_ : 1;  // shape contains the cell center
+  // TODO(user): Use in-class initializer when C++20 is allowed in
+  // opensource version.
+  uint32_t num_edges_ : 31;
 
   // The maximum number of edges that we can store inline in the union.
   static constexpr int kMaxInlineEdges = 2;
@@ -127,8 +123,8 @@ class S2ClippedShape {
   // If there are more than two edges, this field holds a pointer.
   // Otherwise it holds an array of edge ids.
   union {
-    int32* edges_;  // Owned by the containing S2ShapeIndexCell.
-    std::array<int32, kMaxInlineEdges> inline_edges_;
+    int32_t* edges_;  // Owned by the containing S2ShapeIndexCell.
+    std::array<int32_t, kMaxInlineEdges> inline_edges_;
   };
 };
 
@@ -150,7 +146,6 @@ class S2ShapeIndexCell {
 
   // Returns a pointer to the clipped shape corresponding to the given shape,
   // or nullptr if the shape does not intersect this cell.
-  const S2ClippedShape* find_clipped(const S2Shape* shape) const;
   const S2ClippedShape* find_clipped(int shape_id) const;
 
   // Returns a read-only span over the clipped shapes in the cell.
@@ -252,10 +247,11 @@ class S2ShapeIndexCell {
 //     for (auto polygon : polygons) {
 //       index.Add(std::make_unique<S2Polygon::Shape>(polygon));
 //     }
+
 //     auto query = MakeS2ContainsPointQuery(&index);
 //     for (const auto& point : points) {
-//       for (S2Shape* shape : query.GetContainingShapes(point)) {
-//         S2Polygon* polygon = polygons[shape->id()];
+//       for (int shape_id : query.GetContainingShapeIds(point)) {
+//         S2Polygon* polygon = polygons[shape_id];
 //         ... do something with (point, polygon) ...
 //       }
 //     }
@@ -285,14 +281,32 @@ class S2ShapeIndexCell {
 //   }
 //
 // The S2ShapeIndex subtypes provided by the S2 library are thread-compatible,
-// meaning that const methods are const methods may be called concurrently
-// from multiple threads, while non-const methods require exclusive access to
-// the S2ShapeIndex.
+// meaning that const methods may be called concurrently from multiple threads,
+// while non-const methods require exclusive access to the S2ShapeIndex.
 class S2ShapeIndex {
- protected:
-  class IteratorBase;
-
  public:
+  // Each subtype of S2ShapeIndex should define an Iterator type derived
+  // from the following base class.
+  class IteratorBase : public S2CellIterator {
+   public:
+    // Returns a reference to the contents of the current index cell.
+    // REQUIRES: !done()
+    virtual const S2ShapeIndexCell& cell() const = 0;
+
+    // Returns a newly allocated copy of this iterator.
+    virtual std::unique_ptr<IteratorBase> Clone() const = 0;
+
+   protected:
+    // Protect the default constructor and move/copy constructors and operators.
+    // This allows sub-classes to still be default/copy/move-constructible but
+    // prevents accidental slicing through a base class pointer.
+    IteratorBase() = default;
+    IteratorBase(const IteratorBase&) = default;
+    IteratorBase& operator=(const IteratorBase&) = default;
+    IteratorBase(IteratorBase&&) = default;
+    IteratorBase& operator=(IteratorBase&&) = default;
+  };
+
   // A type function to check if a type is derived from S2ShapeIndex.  This is
   // useful for writing static checks on template parameters when we want to
   // inline a particular iterator call, but we need to make sure it implements
@@ -305,7 +319,7 @@ class S2ShapeIndex {
   //       "We require an S2ShapeIndex.");
   //   }
   template <typename T>
-  using ImplementedBy = std::is_convertible<absl::decay_t<T>*, S2ShapeIndex*>;
+  using ImplementedBy = std::is_convertible<std::decay_t<T>*, S2ShapeIndex*>;
 
   virtual ~S2ShapeIndex() = default;
 
@@ -316,18 +330,26 @@ class S2ShapeIndex {
 
   // Returns a pointer to the shape with the given id, or nullptr if the shape
   // has been removed from the index.
-  virtual S2Shape* shape(int id) const = 0;
+  virtual const S2Shape* shape(int id) const = 0;
+
+  // Stores an encoded representation of the index into the given encoder.
+  virtual void Encode(Encoder* encoder) const = 0;
 
   // Allows iterating over the indexed shapes using range-based for loops:
   //
   //   for (S2Shape* shape : index) { ... }
   //
   // CAVEAT: Returns nullptr for shapes that have been removed from the index.
-  class ShapeIterator
-      : public std::iterator<std::forward_iterator_tag, S2Shape*> {
+  class ShapeIterator {
    public:
+    using iterator_category = std::forward_iterator_tag;
+    using value_type = const S2Shape*;
+    using difference_type = std::ptrdiff_t;
+    using pointer = const S2Shape**;
+    using reference = const S2Shape*&;
+
     ShapeIterator() = default;
-    S2Shape* operator*() const;
+    const S2Shape* operator*() const;
     ShapeIterator& operator++();
     ShapeIterator operator++(int);
 
@@ -367,10 +389,10 @@ class S2ShapeIndex {
 
   // A random access iterator that provides low-level access to the cells of
   // the index.  Cells are sorted in increasing order of S2CellId.
-  class Iterator final : public S2CellIterator {
+  class Iterator final : public IteratorBase {
    public:
     // Default constructor; must be followed by a call to Init().
-    Iterator() : iter_(nullptr) {}
+    Iterator() = default;
 
     // Constructs an iterator positioned as specified.  By default iterators
     // are unpositioned, since this avoids an extra seek in this situation
@@ -382,8 +404,9 @@ class S2ShapeIndex {
     //   for (S2ShapeIndex::Iterator it(&index, S2ShapeIndex::BEGIN);
     //        !it.done(); it.Next()) { ... }
     explicit Iterator(const S2ShapeIndex* index,
-                      InitialPosition pos = UNPOSITIONED)
-        : iter_(index->NewIterator(pos)) {}
+                      InitialPosition pos = UNPOSITIONED) {
+      Init(index, pos);
+    }
 
     // Initializes an iterator for the given S2ShapeIndex.  This method may
     // also be called in order to restore an iterator to a valid state after
@@ -398,8 +421,8 @@ class S2ShapeIndex {
     // Iterators are copyable and movable.
     Iterator(const Iterator&);
     Iterator& operator=(const Iterator&);
-    Iterator(Iterator&&);
-    Iterator& operator=(Iterator&&);
+    Iterator(Iterator&&) = default;
+    Iterator& operator=(Iterator&&) = default;
 
     // Returns the S2CellId of the current index cell.  If done() is true,
     // returns a value larger than any valid S2CellId (S2CellId::Sentinel()).
@@ -411,7 +434,7 @@ class S2ShapeIndex {
 
     // Returns a reference to the contents of the current index cell.
     // REQUIRES: !done()
-    const S2ShapeIndexCell& cell() const { return iter_->cell(); }
+    const S2ShapeIndexCell& cell() const override { return iter_->cell(); }
 
     // Returns true if the iterator is positioned past the last index cell.
     bool done() const override { return iter_->done(); }
@@ -451,6 +474,11 @@ class S2ShapeIndex {
       return LocateImpl(*this, target);
     }
 
+    // Clone our underlying iterator to clone this iterator.
+    std::unique_ptr<IteratorBase> Clone() const override {
+      return std::make_unique<Iterator>(Iterator(iter_->Clone()));
+    };
+
    private:
     // Although S2ShapeIndex::Iterator can be used to iterate over any
     // index subtype, it is more efficient to use the subtype's iterator when
@@ -464,8 +492,8 @@ class S2ShapeIndex {
     template <class T>
     explicit Iterator(const T* index, InitialPosition pos = UNPOSITIONED) {}
 
-    template <class T>
-    void Init(const T* index, InitialPosition pos = UNPOSITIONED) {}
+    explicit Iterator(std::unique_ptr<IteratorBase> iter)
+        : iter_(std::move(iter)) {}
 
     std::unique_ptr<IteratorBase> iter_;
   };
@@ -490,78 +518,15 @@ class S2ShapeIndex {
   };
 
  protected:
-  // Each subtype of S2ShapeIndex should define an Iterator type derived
-  // from the following base class.
-  class IteratorBase : public S2CellIterator {
-   public:
-    ~IteratorBase() override = default;
-
-    IteratorBase(const IteratorBase&);
-    IteratorBase& operator=(const IteratorBase&);
-
-    // Returns the S2CellId of the current index cell.  If done() is true,
-    // returns a value larger than any valid S2CellId (S2CellId::Sentinel()).
-    S2CellId id() const override;
-
-    // Returns the center point of the cell.
-    // REQUIRES: !done()
-    S2Point center() const;
-
-    // Returns a reference to the contents of the current index cell.
-    // REQUIRES: !done()
-    const S2ShapeIndexCell& cell() const;
-
-    // Returns true if the iterator is positioned past the last index cell.
-    bool done() const override;
-
-   protected:
-    IteratorBase() : id_(S2CellId::Sentinel()), cell_(nullptr) {}
-
-    // Sets the iterator state.  "cell" typically points to the cell contents,
-    // but may also be given as "nullptr" in order to implement decoding on
-    // demand.  In that situation, the first that the client attempts to
-    // access the cell contents, the GetCell() method is called and "cell_" is
-    // updated in a thread-safe way.
-    void set_state(S2CellId id, const S2ShapeIndexCell* cell);
-
-    // Sets the iterator state so that done() is true.
-    void set_finished();
-
-    // Returns the current contents of the "cell_" field, which may be nullptr
-    // if the cell contents have not been decoded yet.
-    const S2ShapeIndexCell* raw_cell() const;
-
-    // This method is called to decode the contents of the current cell, if
-    // set_state() was previously called with a nullptr "cell" argument.  This
-    // allows decoding on demand for subtypes that keep the cell contents in
-    // an encoded state.  It does not need to be implemented at all if
-    // set_state() is always called with (cell != nullptr).
-    //
-    // REQUIRES: This method is thread-safe.
-    // REQUIRES: Multiple calls to this method return the same value.
-    virtual const S2ShapeIndexCell* GetCell() const = 0;
-
-    // Returns an exact copy of this iterator.
-    virtual std::unique_ptr<IteratorBase> Clone() const = 0;
-
-    // Makes a copy of the given source iterator.
-    // REQUIRES: "other" has the same concrete type as "this".
-    virtual void Copy(const IteratorBase& other) = 0;
-
-   private:
-    friend class Iterator;
-
-    // This method is "const" because it is used internally by "const" methods
-    // in order to implement decoding on demand.
-    void set_cell(const S2ShapeIndexCell* cell) const;
-
-    S2CellId id_;
-    mutable std::atomic<const S2ShapeIndexCell*> cell_;
-  };
-
   // Returns a new iterator positioned as specified.
   virtual std::unique_ptr<IteratorBase> NewIterator(InitialPosition pos)
       const = 0;
+
+  S2ShapeIndex() = default;
+  S2ShapeIndex(const S2ShapeIndex&) = delete;
+  S2ShapeIndex(S2ShapeIndex&&) = delete;
+  S2ShapeIndex& operator=(const S2ShapeIndex&) = delete;
+  S2ShapeIndex& operator=(S2ShapeIndex&&) = delete;
 };
 
 //////////////////   Implementation details follow   ////////////////////
@@ -584,12 +549,12 @@ inline int S2ClippedShape::edge(int i) const {
 }
 
 // Initialize an S2ClippedShape to hold the given number of edges.
-inline void S2ClippedShape::Init(int32 shape_id, int32 num_edges) {
+inline void S2ClippedShape::Init(int32_t shape_id, int32_t num_edges) {
   shape_id_ = shape_id;
   num_edges_ = num_edges;
   contains_center_ = false;
   if (!is_inline()) {
-    edges_ = new int32[num_edges];
+    edges_ = new int32_t[num_edges];
   }
 }
 
@@ -621,11 +586,6 @@ inline void S2ClippedShape::set_edge(int i, int edge) {
   }
 }
 
-inline const S2ClippedShape* S2ShapeIndexCell::find_clipped(
-    const S2Shape* shape) const {
-  return find_clipped(shape->id());
-}
-
 // Inline because an index cell frequently contains just one shape.
 inline int S2ShapeIndexCell::num_edges() const {
   int n = 0;
@@ -633,7 +593,7 @@ inline int S2ShapeIndexCell::num_edges() const {
   return n;
 }
 
-inline S2Shape* S2ShapeIndex::ShapeIterator::operator*() const {
+inline const S2Shape* S2ShapeIndex::ShapeIterator::operator*() const {
   return index_->shape(shape_id_);
 }
 
@@ -648,12 +608,12 @@ inline S2ShapeIndex::ShapeIterator S2ShapeIndex::ShapeIterator::operator++(
 }
 
 inline bool S2ShapeIndex::ShapeIterator::operator==(ShapeIterator it) const {
-  S2_DCHECK_EQ(index_, it.index_);
+  ABSL_DCHECK_EQ(index_, it.index_);
   return shape_id_ == it.shape_id_;
 }
 
 inline bool S2ShapeIndex::ShapeIterator::operator!=(ShapeIterator it) const {
-  S2_DCHECK_EQ(index_, it.index_);
+  ABSL_DCHECK_EQ(index_, it.index_);
   return shape_id_ != it.shape_id_;
 }
 
@@ -665,86 +625,13 @@ inline S2ShapeIndex::ShapeIterator S2ShapeIndex::end() const {
   return ShapeIterator(this, num_shape_ids());
 }
 
-inline S2ShapeIndex::IteratorBase::IteratorBase(const IteratorBase& other)
-    : id_(other.id_), cell_(other.raw_cell()) {
-}
-
-inline S2ShapeIndex::IteratorBase&
-S2ShapeIndex::IteratorBase::operator=(const IteratorBase& other) {
-  id_ = other.id_;
-  set_cell(other.raw_cell());
-  return *this;
-}
-
-inline S2CellId S2ShapeIndex::IteratorBase::id() const {
-  return id_;
-}
-
-inline const S2ShapeIndexCell& S2ShapeIndex::IteratorBase::cell() const {
-  // Like other const methods, this method is thread-safe provided that it
-  // does not overlap with calls to non-const methods.
-  S2_DCHECK(!done());
-  const S2ShapeIndexCell* cell = raw_cell();
-  if (cell == nullptr) {
-    cell = GetCell();
-    if (cell == nullptr) {
-      static const S2ShapeIndexCell* empty_cell = new S2ShapeIndexCell();
-
-      // TODO(b/264878715): Replace with proper error handling.
-      S2_LOG(WARNING) << "Couldn't retrieve cell, possible data corruption?";
-      cell = empty_cell;
-    }
-    set_cell(cell);
-  }
-  return *cell;
-}
-
-inline bool S2ShapeIndex::IteratorBase::done() const {
-  return id_ == S2CellId::Sentinel();
-}
-
-inline S2Point S2ShapeIndex::IteratorBase::center() const {
-  S2_DCHECK(!done());
-  return id().ToPoint();
-}
-
-inline void S2ShapeIndex::IteratorBase::set_state(
-    S2CellId id, const S2ShapeIndexCell* cell) {
-  id_ = id;
-  set_cell(cell);
-}
-
-inline void S2ShapeIndex::IteratorBase::set_finished() {
-  set_state(S2CellId::Sentinel(), nullptr);
-}
-
-inline const S2ShapeIndexCell* S2ShapeIndex::IteratorBase::raw_cell()
-    const {
-  return cell_.load(std::memory_order_relaxed);
-}
-
-inline void S2ShapeIndex::IteratorBase::set_cell(
-    const S2ShapeIndexCell* cell) const {
-  cell_.store(cell, std::memory_order_relaxed);
-}
-
 inline S2ShapeIndex::Iterator::Iterator(const Iterator& other)
     : iter_(other.iter_->Clone()) {
 }
 
 inline S2ShapeIndex::Iterator& S2ShapeIndex::Iterator::operator=(
     const Iterator& other) {
-  iter_->Copy(*other.iter_);
-  return *this;
-}
-
-inline S2ShapeIndex::Iterator::Iterator(Iterator&& other)
-    : iter_(std::move(other.iter_)) {
-}
-
-inline S2ShapeIndex::Iterator& S2ShapeIndex::Iterator::operator=(
-    Iterator&& other) {
-  iter_ = std::move(other.iter_);
+  iter_ = other.iter_->Clone();
   return *this;
 }
 

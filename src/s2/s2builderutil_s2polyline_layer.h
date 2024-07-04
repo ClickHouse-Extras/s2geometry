@@ -22,7 +22,6 @@
 #include <utility>
 #include <vector>
 
-#include "s2/base/logging.h"
 #include "s2/id_set_lexicon.h"
 #include "s2/mutable_s2shape_index.h"
 #include "s2/s2builder.h"
@@ -92,7 +91,7 @@ class S2PolylineLayer : public S2Builder::Layer {
   // The labels associated with the edge "polyline.vertex({j, j+1})" can be
   // retrieved as follows:
   //
-  //   for (int32 label : label_set_lexicon.id_set(label_set_ids[j])) {...}
+  //   for (int32_t label : label_set_lexicon.id_set(label_set_ids[j])) {...}
   using LabelSetIds = std::vector<LabelSetId>;
   S2PolylineLayer(S2Polyline* polyline, LabelSetIds* label_set_ids,
                  IdSetLexicon* label_set_lexicon,

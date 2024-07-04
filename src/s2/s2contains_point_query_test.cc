@@ -24,11 +24,14 @@
 
 #include "s2/base/casts.h"
 #include <gtest/gtest.h>
+#include "absl/log/log_streamer.h"
+#include "absl/random/random.h"
 #include "s2/mutable_s2shape_index.h"
 #include "s2/s1angle.h"
 #include "s2/s2cap.h"
 #include "s2/s2loop.h"
 #include "s2/s2point.h"
+#include "s2/s2random.h"
 #include "s2/s2shape.h"
 #include "s2/s2shapeutil_shape_edge.h"
 #include "s2/s2shapeutil_shape_edge_id.h"
@@ -60,10 +63,10 @@ TEST(S2ContainsPointQuery, VertexModelOpen) {
   // Test the last few cases using the Init() method instead.
   S2ContainsPointQuery<MutableS2ShapeIndex> q2;
   q2.Init(index.get(), options);
-  EXPECT_FALSE(q2.ShapeContains(*index->shape(1), MakePointOrDie("1:6")));
-  EXPECT_TRUE(q2.ShapeContains(*index->shape(2), MakePointOrDie("1:6")));
-  EXPECT_FALSE(q2.ShapeContains(*index->shape(2), MakePointOrDie("0:5")));
-  EXPECT_FALSE(q2.ShapeContains(*index->shape(2), MakePointOrDie("0:7")));
+  EXPECT_FALSE(q2.ShapeContains(1, MakePointOrDie("1:6")));
+  EXPECT_TRUE(q2.ShapeContains(2, MakePointOrDie("1:6")));
+  EXPECT_FALSE(q2.ShapeContains(2, MakePointOrDie("0:5")));
+  EXPECT_FALSE(q2.ShapeContains(2, MakePointOrDie("0:7")));
 }
 
 TEST(S2ContainsPointQuery, VertexModelSemiOpen) {
@@ -83,10 +86,10 @@ TEST(S2ContainsPointQuery, VertexModelSemiOpen) {
   // Test the last few cases using the Init() method instead.
   S2ContainsPointQuery<MutableS2ShapeIndex> q2;
   q2.Init(index.get(), options);
-  EXPECT_FALSE(q2.ShapeContains(*index->shape(1), MakePointOrDie("1:6")));
-  EXPECT_TRUE(q2.ShapeContains(*index->shape(2), MakePointOrDie("1:6")));
-  EXPECT_FALSE(q2.ShapeContains(*index->shape(2), MakePointOrDie("0:5")));
-  EXPECT_TRUE(q2.ShapeContains(*index->shape(2), MakePointOrDie("0:7")));
+  EXPECT_FALSE(q2.ShapeContains(1, MakePointOrDie("1:6")));
+  EXPECT_TRUE(q2.ShapeContains(2, MakePointOrDie("1:6")));
+  EXPECT_FALSE(q2.ShapeContains(2, MakePointOrDie("0:5")));
+  EXPECT_TRUE(q2.ShapeContains(2, MakePointOrDie("0:7")));
 }
 
 TEST(S2ContainsPointQuery, VertexModelClosed) {
@@ -106,39 +109,67 @@ TEST(S2ContainsPointQuery, VertexModelClosed) {
   // Test the last few cases using the Init() method instead.
   S2ContainsPointQuery<MutableS2ShapeIndex> q2;
   q2.Init(index.get(), options);
-  EXPECT_FALSE(q2.ShapeContains(*index->shape(1), MakePointOrDie("1:6")));
-  EXPECT_TRUE(q2.ShapeContains(*index->shape(2), MakePointOrDie("1:6")));
-  EXPECT_TRUE(q2.ShapeContains(*index->shape(2), MakePointOrDie("0:5")));
-  EXPECT_TRUE(q2.ShapeContains(*index->shape(2), MakePointOrDie("0:7")));
+  EXPECT_FALSE(q2.ShapeContains(1, MakePointOrDie("1:6")));
+  EXPECT_TRUE(q2.ShapeContains(2, MakePointOrDie("1:6")));
+  EXPECT_TRUE(q2.ShapeContains(2, MakePointOrDie("0:5")));
+  EXPECT_TRUE(q2.ShapeContains(2, MakePointOrDie("0:7")));
+}
+
+TEST(S2ContainsPointQuery, VisitContainingShapesCanStopEarly) {
+  auto index = MakeIndexOrDie("0:0 # 0:0, 1:1 # -1:0, 0:1, 1:0, 0:-1");
+  const S2Point kPoint = S2LatLng::FromDegrees(0, 0).ToPoint();
+
+  // Under a closed vertex model there should be 3 shapes that contain 0,0.
+  S2ContainsPointQueryOptions options;
+  options.set_vertex_model(S2VertexModel::CLOSED);
+  auto query = MakeS2ContainsPointQuery(index.get(), options);
+
+  // But if we return false, we should only see the first one.
+  int count = 0;
+  bool status = query.VisitContainingShapes(kPoint, [&](const S2Shape*) {
+    ++count;
+    return false;
+  });
+  EXPECT_FALSE(status);
+  EXPECT_EQ(count, 1);
 }
 
 TEST(S2ContainsPointQuery, GetContainingShapes) {
   // Also tests ShapeContains().
-  const int kNumVerticesPerLoop = 10;
+  absl::BitGen bitgen(S2Testing::MakeTaggedSeedSeq(
+      "GET_CONTAINING_SHAPES",
+      absl::LogInfoStreamer(__FILE__, __LINE__).stream()));
+  constexpr int kNumVerticesPerLoop = 10;
   const S1Angle kMaxLoopRadius = S2Testing::KmToAngle(10);
-  const S2Cap center_cap(S2Testing::RandomPoint(), kMaxLoopRadius);
+  const S2Cap center_cap(s2random::Point(bitgen), kMaxLoopRadius);
   MutableS2ShapeIndex index;
   for (int i = 0; i < 100; ++i) {
     unique_ptr<S2Loop> loop = S2Loop::MakeRegularLoop(
-        S2Testing::SamplePoint(center_cap),
-        S2Testing::rnd.RandDouble() * kMaxLoopRadius, kNumVerticesPerLoop);
+        s2random::SamplePoint(bitgen, center_cap),
+        absl::Uniform(bitgen, 0.0, 1.0) * kMaxLoopRadius, kNumVerticesPerLoop);
     index.Add(make_unique<S2Loop::OwningShape>(std::move(loop)));
   }
   auto query = MakeS2ContainsPointQuery(&index);
   for (int i = 0; i < 100; ++i) {
-    S2Point p = S2Testing::SamplePoint(center_cap);
-    vector<S2Shape*> expected;
-    for (S2Shape* shape : index) {
+    S2Point p = s2random::SamplePoint(bitgen, center_cap);
+
+    vector<int> expected_ids;
+    vector<const S2Shape*> expected_shapes;
+
+    int shape_id = 0;
+    for (const S2Shape* shape : index) {
       const S2Loop* loop = down_cast<const S2Loop::Shape*>(shape)->loop();
       if (loop->Contains(p)) {
-        EXPECT_TRUE(query.ShapeContains(*shape, p));
-        expected.push_back(shape);
+        EXPECT_TRUE(query.ShapeContains(shape_id, p));
+        expected_shapes.push_back(shape);
+        expected_ids.push_back(shape_id);
       } else {
-        EXPECT_FALSE(query.ShapeContains(*shape, p));
+        EXPECT_FALSE(query.ShapeContains(shape_id, p));
       }
+      ++shape_id;
     }
-    vector<S2Shape*> actual = query.GetContainingShapes(p);
-    EXPECT_EQ(expected, actual);
+    EXPECT_EQ(query.GetContainingShapes(p), expected_shapes);
+    EXPECT_EQ(query.GetContainingShapeIds(p), expected_ids);
   }
 }
 

@@ -21,6 +21,8 @@
 #include <memory>
 #include <utility>
 
+#include "absl/log/absl_check.h"
+#include "absl/log/absl_log.h"
 #include "absl/types/span.h"
 #include "absl/utility/utility.h"
 #include "s2/util/coding/coder.h"
@@ -35,14 +37,13 @@ using absl::MakeSpan;
 using absl::Span;
 using std::make_unique;
 
-S2LaxPolylineShape::S2LaxPolylineShape(S2LaxPolylineShape&& other)
-    : S2Shape(std::move(other)),
-      num_vertices_(absl::exchange(other.num_vertices_, 0)),
+S2LaxPolylineShape::S2LaxPolylineShape(S2LaxPolylineShape&& other) noexcept
+    : num_vertices_(std::exchange(other.num_vertices_, 0)),
       vertices_(std::move(other.vertices_)) {}
 
-S2LaxPolylineShape& S2LaxPolylineShape::operator=(S2LaxPolylineShape&& other) {
-  S2Shape::operator=(static_cast<S2Shape&&>(other));
-  num_vertices_ = absl::exchange(other.num_vertices_, 0);
+S2LaxPolylineShape& S2LaxPolylineShape::operator=(
+    S2LaxPolylineShape&& other) noexcept {
+  num_vertices_ = std::exchange(other.num_vertices_, 0);
   vertices_ = std::move(other.vertices_);
   return *this;
 }
@@ -57,7 +58,7 @@ S2LaxPolylineShape::S2LaxPolylineShape(const S2Polyline& polyline) {
 
 void S2LaxPolylineShape::Init(Span<const S2Point> vertices) {
   num_vertices_ = vertices.size();
-  S2_LOG_IF(WARNING, num_vertices_ == 1)
+  ABSL_LOG_IF(WARNING, num_vertices_ == 1)
       << "s2shapeutil::S2LaxPolylineShape with one vertex has no edges";
   vertices_ = make_unique<S2Point[]>(num_vertices_);
   std::copy(vertices.begin(), vertices.end(), vertices_.get());
@@ -65,7 +66,7 @@ void S2LaxPolylineShape::Init(Span<const S2Point> vertices) {
 
 void S2LaxPolylineShape::Init(const S2Polyline& polyline) {
   num_vertices_ = polyline.num_vertices();
-  S2_LOG_IF(WARNING, num_vertices_ == 1)
+  ABSL_LOG_IF(WARNING, num_vertices_ == 1)
       << "s2shapeutil::S2LaxPolylineShape with one vertex has no edges";
   vertices_ = make_unique<S2Point[]>(num_vertices_);
   std::copy(&polyline.vertex(0), &polyline.vertex(0) + num_vertices_,
@@ -99,7 +100,7 @@ bool S2LaxPolylineShape::Init(Decoder* decoder, S2Error& error) {
 }
 
 S2Shape::Edge S2LaxPolylineShape::edge(int e) const {
-  S2_DCHECK_LT(e, num_edges());
+  ABSL_DCHECK_LT(e, num_edges());
   return Edge(vertex(e), vertex(e + 1));
 }
 
@@ -112,8 +113,8 @@ S2Shape::Chain S2LaxPolylineShape::chain(int i) const {
 }
 
 S2Shape::Edge S2LaxPolylineShape::chain_edge(int i, int j) const {
-  S2_DCHECK_EQ(i, 0);
-  S2_DCHECK_LT(j, num_edges());
+  ABSL_DCHECK_EQ(i, 0);
+  ABSL_DCHECK_LT(j, num_edges());
   return Edge(vertex(j), vertex(j + 1));
 }
 
@@ -132,7 +133,7 @@ void EncodedS2LaxPolylineShape::Encode(Encoder* encoder,
 }
 
 S2Shape::Edge EncodedS2LaxPolylineShape::edge(int e) const {
-  S2_DCHECK_LT(e, num_edges());
+  ABSL_DCHECK_LT(e, num_edges());
   return Edge(vertex(e), vertex(e + 1));
 }
 
@@ -145,8 +146,8 @@ S2Shape::Chain EncodedS2LaxPolylineShape::chain(int i) const {
 }
 
 S2Shape::Edge EncodedS2LaxPolylineShape::chain_edge(int i, int j) const {
-  S2_DCHECK_EQ(i, 0);
-  S2_DCHECK_LT(j, num_edges());
+  ABSL_DCHECK_EQ(i, 0);
+  ABSL_DCHECK_LT(j, num_edges());
   return Edge(vertex(j), vertex(j + 1));
 }
 

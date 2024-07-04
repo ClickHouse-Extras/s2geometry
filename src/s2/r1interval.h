@@ -24,8 +24,8 @@
 #include <iostream>
 #include <ostream>
 
-#include "s2/base/logging.h"
-#include "s2/_fp_contract_off.h"
+#include "absl/log/absl_check.h"
+#include "s2/_fp_contract_off.h"  // IWYU pragma: keep
 #include "s2/util/math/vector.h"  // IWYU pragma: export
 
 // An R1Interval represents a closed, bounded interval on the real line.
@@ -170,7 +170,7 @@ class R1Interval {
   // Return the closest point in the interval to the given point "p".
   // The interval must be non-empty.
   double Project(double p) const {
-    S2_DCHECK(!is_empty());
+    ABSL_DCHECK(!is_empty());
     return std::max(lo(), std::min(hi(), p));
   }
 
